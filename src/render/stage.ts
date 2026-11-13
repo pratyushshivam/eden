@@ -69,6 +69,8 @@ export class Stage {
   private airMat: THREE.ShaderMaterial;
   private cloudMat: THREE.ShaderMaterial;
   private canopy: THREE.InstancedMesh | null = null;
+  /** Every tree mesh with where its trees stand, so they can part for whoever is followed. */
+  private groves: { mesh: THREE.InstancedMesh; at: { x: number; y: number; z: number }[]; base: THREE.Matrix4[]; down: Uint8Array }[] = [];
   private canopyAt: { x: number; y: number; z: number; cell: number }[] = [];
   private berries: THREE.InstancedMesh | null = null;
   private tufts: THREE.InstancedMesh;
@@ -309,9 +311,14 @@ export class Stage {
       stand(tmpM, o.x, o.y, o.z, R + globe.heightAt(o.x, o.y, o.z) - 0.05, s, hash1(i * 7.7 + o.x) * 6.28, s * (0.9 + hash1(i) * 0.3));
       mesh.setMatrixAt(i, tmpM);
     };
+    this.groves = [];
+    const grove = (mesh: THREE.InstancedMesh, list: { x: number; y: number; z: number }[]): void => {
+      this.groves.push({ mesh, at: list, base: list.map((_, i) => { const mm = new THREE.Matrix4(); mesh.getMatrixAt(i, mm); return mm; }), down: new Uint8Array(list.length) });
+    };
     byType.forEach((list, ty) => {
       const mesh = new THREE.InstancedMesh(shapes[ty], std(), list.length);
       list.forEach((tr, i) => place(mesh, i, tr));
+      if (ty > 0) grove(mesh, list);
       mesh.castShadow = mesh.receiveShadow = true;
       mesh.frustumCulled = false;
       this.flora.add(mesh);
@@ -327,6 +334,7 @@ export class Stage {
       place(this.canopy as THREE.InstancedMesh, i, tr);
       this.canopy?.setColorAt(i, tmpC.set(0x5f9a3e));
     });
+    grove(this.canopy, byType[0]);
     const bushGeo = join([part(ball(0), 0x5b8f3d, { s: [0.5, 0.36, 0.5], p: [0, 0.26, 0] }), part(ball(0), 0x6a9d45, { s: [0.34, 0.28, 0.34], p: [0.3, 0.22, 0.12] })]);
     const bushes = new THREE.InstancedMesh(bushGeo, std(), t.bushes.length);
     t.bushes.forEach((b, i) => place(bushes, i, b));
@@ -523,6 +531,7 @@ export class Stage {
     this.things(w);
     this.critters.update(w, dt, this.time, cam.dist, globe);
 
+    this.partTrees(sel && selAt && cam.dist < 70 && !sel.alt ? selAt : null);
     if (sel && selAt) {
       this.ring.visible = true;
       vy.set(selAt.ux, selAt.uy, selAt.uz);
@@ -546,6 +555,27 @@ export class Stage {
       this.resize();
     }
     this.renderer.render(this.scene, this.camera);
+  }
+
+  /** The trees right over the followed creature shrink out of the way, and grow back when it moves on. */
+  private partTrees(at: { ux: number; uy: number; uz: number } | null): void {
+    const reach = (2.4 / R) ** 2;
+    for (const g of this.groves) {
+      let changed = false;
+      for (let i = 0; i < g.at.length; i++) {
+        const tr = g.at[i];
+        const near = at !== null && (tr.x - at.ux) ** 2 + (tr.y - at.uy) ** 2 + (tr.z - at.uz) ** 2 < reach ? 1 : 0;
+        if (near === g.down[i]) continue;
+        g.down[i] = near;
+        changed = true;
+        if (near) {
+          g.base[i].decompose(tmpP, tmpQ, tmpS);
+          tmpM.compose(tmpP, tmpQ, tmpS.multiplyScalar(0.001));
+          g.mesh.setMatrixAt(i, tmpM);
+        } else g.mesh.setMatrixAt(i, g.base[i]);
+      }
+      if (changed) g.mesh.instanceMatrix.needsUpdate = true;
+    }
   }
 
   private weatherFx(w: World, dt: number): void {

@@ -108,13 +108,13 @@ export const SPECIES: readonly SpeciesDef[] = [
   },
   {
     ...base, key: "skim", one: "skim", many: "skims", tier: 0, blurb: "White fliers that fish the shallows.",
-    air: true, fish: true, speed: 4.2, sense: 16, lifespan: 8, adultAt: 1.4, maxEnergy: 70, mass: 20, burn: 0.3, bite: 4,
-    digest: 0.8, thirstDays: 60, comfort: 5, mateEvery: 1.8, mateAt: 0.66, birthEnergy: 28, tire: 0.012, crowd: 10,
+    air: true, fish: true, speed: 4.2, sense: 16, lifespan: 10, adultAt: 1.4, maxEnergy: 70, mass: 20, burn: 0.3, bite: 4,
+    digest: 0.8, thirstDays: 60, comfort: 5, mateEvery: 1.8, mateAt: 0.66, birthEnergy: 28, tire: 0.012, crowd: 16,
   },
   {
     ...base, key: "glim", one: "glim", many: "glims", tier: 0, blurb: "Sea drifters that glow in the dark.",
-    sea: true, fish: true, speed: 1.8, sense: 9, lifespan: 7, adultAt: 1.3, maxEnergy: 60, mass: 18, burn: 0.2, bite: 3.5,
-    digest: 0.8, thirstDays: 999, comfort: -20, mateEvery: 1.4, mateAt: 0.64, birthEnergy: 24, tire: 0.01, crowd: 9,
+    sea: true, fish: true, speed: 1.8, sense: 10, lifespan: 12, adultAt: 1.3, maxEnergy: 60, mass: 18, burn: 0.2, bite: 3.5,
+    digest: 0.8, thirstDays: 999, comfort: -20, mateEvery: 1.0, mateAt: 0.64, birthEnergy: 24, tire: 0.01, crowd: 16,
   },
   {
     ...base, key: "murr", one: "murr", many: "murrs", tier: 1, blurb: "Long-armed foragers. They remember where food was.",

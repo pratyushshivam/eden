@@ -1167,14 +1167,14 @@ function sense(w: World, c: Creature, idx: number): void {
   // A hunter strikes.
   if (prey && c.foodKind !== 4 && out[OUT.eat] > 0) {
     const victim = prey;
-    if (arc(victim.x, victim.y, victim.z, c.x, c.y, c.z) < (sp === KITH ? 2.6 : 1.5)) {
+    if (arc(victim.x, victim.y, victim.z, c.x, c.y, c.z) < (sp === KITH ? 2.6 : 1.8)) {
       let herd = 0;
       for (const j of w.buckets[bucketOf(victim.x, victim.y, victim.z)]) {
         const o = w.creatures[j];
         if (o.sp === victim.sp && o !== victim && arc(o.x, o.y, o.z, victim.x, victim.y, victim.z) < 4) herd++;
       }
       const safe = victim.sp === KITH && victim.state === 3 && w.shelters.some((s) => s.done && arc(s.x, s.y, s.z, victim.x, victim.y, victim.z) < 1.6);
-      const chance = safe ? 0 : (0.42 / (1 + 0.25 * herd)) * (victim.state === 3 ? 1.5 : 1) * (isAdult(w, victim) ? 1 : 1.4);
+      const chance = safe ? 0 : (0.5 / (1 + 0.25 * herd)) * (victim.state === 3 ? 1.5 : 1) * (isAdult(w, victim) ? 1 : 1.4);
       c.tired = Math.min(1, c.tired + 0.06);
       if (w.rng.next() < chance) {
         victim.health -= isAdult(w, victim) ? 0.55 : 1;

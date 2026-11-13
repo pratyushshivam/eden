@@ -24,8 +24,8 @@ export function populate(w: World, groups = 2): void {
   const mild = (i: number): boolean => t.temp[i] > 12 && t.temp[i] < 27 && t.freshDist[i] < 25;
   for (let q = 0; q < groups; q++) {
     const meadow = pick((i) => t.kind[i] === PLAINS && mild(i) && t.fert[i] > 0.6, q + 1);
-    drop(0, 14, meadow);
-    drop(1, 2, pick((i) => t.kind[i] === PLAINS && meadow >= 0 && g.cx[i] * g.cx[meadow] + g.cy[i] * g.cy[meadow] + g.cz[i] * g.cz[meadow] > 0.985 && i !== meadow, q + 11));
+    drop(0, 24, meadow);
+    drop(1, 4, pick((i) => t.kind[i] === PLAINS && meadow >= 0 && g.cx[i] * g.cx[meadow] + g.cy[i] * g.cy[meadow] + g.cz[i] * g.cz[meadow] > 0.985 && i !== meadow, q + 11));
     drop(2, 8, pick((i) => t.kind[i] === SHALLOW && t.temp[i] > 8, q + 21));
     drop(3, 10, pick((i) => t.kind[i] === SHALLOW && t.temp[i] > 8, q + 31));
     drop(4, 8, pick((i) => (t.kind[i] === FOREST || t.kind[i] === JUNGLE) && mild(i), q + 41));

@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 import { defineConfig, loadEnv, type Plugin } from "vite";
-import { handleMind, spendReport, type MindEnv } from "./server/mind";
+import { handleMind, spendReport, type MindEnv } from "./server/mind.ts";
 
 /**
  * Serves /api/mind from inside the dev server. The key is read here, on the

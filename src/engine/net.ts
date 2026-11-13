@@ -165,7 +165,6 @@ export function founderBrain(sp: Species, rng: Rng): Float32Array {
   if (def.tier >= CLEVER) {
     // Clever kinds go back to where they remember food, and look into new things.
     out(VEC.goodPlace, F.hunger, 1.1);
-    out(VEC.goodPlace, F.thirst, 1.1);
     bias(VEC.novel, 0.5);
     out(VEC.novel, F.fear, -1.5);
     bias(VEC.follow, 0.3);
