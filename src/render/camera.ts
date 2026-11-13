@@ -112,13 +112,14 @@ export class GlobeCam {
   /** Slides the planet under the pointer. */
   /** Turns the view by mouse movement: used while the pointer is held by the page. */
   mouse(dx: number, dy: number): void {
-    this.gAz += dx * 0.0032;
-    this.gTilt = Math.min(0.3, Math.max(-0.8, this.gTilt + dy * 0.0026));
+    // Mouse to the right looks right; mouse down looks down.
+    this.gAz -= dx * 0.0032;
+    this.gTilt = Math.min(0.3, Math.max(-0.8, this.gTilt - dy * 0.0026));
   }
 
   private pan(dx: number, dy: number): void {
     if (this.avatar) {
-      this.mouse(-dx * 1.4, -dy * 1.4);
+      this.mouse(dx * 1.2, dy * 1.2);
       return;
     }
     const perPx = (2 * this.dist * Math.tan((this.camera.fov * Math.PI) / 360)) / this.el.clientHeight;
@@ -134,7 +135,7 @@ export class GlobeCam {
 
   /** Turns the view about the point looked at, and tips it. */
   private look(dx: number, dy: number): void {
-    this.gAz -= dx * 0.005;
+    this.gAz += dx * 0.005;
     this.gTilt = Math.min(0.5, Math.max(-1, this.gTilt - dy * 0.004));
     this.onMove(false);
   }
@@ -197,7 +198,8 @@ export class GlobeCam {
     this.north.copy(Y).addScaledVector(up, -up.y).normalize();
     this.east.crossVectors(up, this.north);
     this.fwd.copy(this.north).multiplyScalar(Math.cos(this.az)).addScaledVector(this.east, Math.sin(this.az));
-    this.right.copy(this.east).multiplyScalar(Math.cos(this.az)).addScaledVector(this.north, -Math.sin(this.az));
+    // Screen-right: forward crossed with up. (East is to the left of a view that looks north from outside.)
+    this.right.copy(this.east).multiplyScalar(-Math.cos(this.az)).addScaledVector(this.north, Math.sin(this.az));
 
     // From orbit, look straight down. Closer in, tip towards the horizon.
     const tilt = this.avatar ? Math.min(1.5, Math.max(0.45, 1.26 + this.tilt)) : Math.min(1.36, Math.max(0, 1.02 * (1 - smooth(45, 230, this.dist)) + this.tilt));

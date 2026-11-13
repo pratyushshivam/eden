@@ -148,7 +148,9 @@ async function boot(): Promise<void> {
     sound.start();
     if (embodied) {
       // In a body, a click on the world takes hold of the mouse for looking around.
-      if (chatWith < 0) void canvas.requestPointerLock?.();
+      // While talking, a click on the world walks away from the talk.
+      if (chatWith >= 0) closeChat();
+      else void canvas.requestPointerLock?.();
       return;
     }
     if (touring) {
@@ -336,6 +338,7 @@ async function boot(): Promise<void> {
   function openChat(id: number): void {
     if (!world.byId.has(id)) return;
     chatWith = id;
+    world.ctl.talkTo = id;
     slow = true;
     document.body.classList.add("slow");
     document.exitPointerLock?.();
@@ -348,7 +351,9 @@ async function boot(): Promise<void> {
   }
   function closeChat(): void {
     chatWith = -1;
+    world.ctl.talkTo = -1;
     slow = false;
+    ($("chat-input") as HTMLInputElement).blur();
     document.body.classList.remove("slow");
     $("chat").hidden = true;
   }
@@ -378,8 +383,17 @@ async function boot(): Promise<void> {
       if (chatWith === id) drawChat();
     });
   });
-  $("chat-input").addEventListener("keydown", (e) => {
-    if ((e as KeyboardEvent).key === "Escape") closeChat();
+  // Escape ends the talk wherever the keyboard happens to be, and so does the button.
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && chatWith >= 0) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      closeChat();
+    }
+  }, true);
+  $("chat-end").addEventListener("click", (e) => {
+    e.preventDefault();
+    closeChat();
   });
   $("interact").addEventListener("click", () => {
     if (nearKith >= 0) openChat(nearKith);
@@ -722,7 +736,7 @@ async function boot(): Promise<void> {
       const sun = sunAt(world, cam.tgt.x, cam.tgt.y, cam.tgt.z);
       // Local time of day from the sun's height and whether it is rising or setting here.
       const east = world.sunX * cam.right.x + world.sunY * cam.right.y + world.sunZ * cam.right.z;
-      const rising = east * Math.cos(cam.az) > 0;
+      const rising = -east * Math.cos(cam.az) > 0;
       const tod = sun < -0.15 ? "night" : sun < 0.12 ? (rising ? "dawn" : "dusk") : sun < 0.6 ? (rising ? "morning" : "afternoon") : "midday";
       const sky = wx.dry ? ", drought" : wx.rain > 0.25 ? (wx.temp < 1.5 ? ", snow" : ", rain") : "";
       here = ` · here: ${tod}, ${Math.round(wx.temp)}°${sky}`;
