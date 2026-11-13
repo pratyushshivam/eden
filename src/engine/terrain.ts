@@ -121,7 +121,7 @@ export function makeTerrain(seed: number): Terrain {
     } else height[i] = Math.max(-5, e * 1.5);
     const lat = Math.abs(y);
     moist[i] = Math.min(1, Math.max(0, fbm3(x * 2.4 + 7, y * 2.4, z * 2.4, seed + 51, 4) * 1.15 - 0.1 + 0.18 * (1 - lat) - 0.3 * Math.exp(-(((lat - 0.36) / 0.13) ** 2))));
-    temp[i] = 30 - 39 * y * y - Math.max(0, height[i]) * 2.1;
+    temp[i] = 30 - 39 * y * y - Math.max(0, height[i]) * 1.3;
   }
 
   // 2. Rivers: from wet high ground, always downhill, to the sea or to a hollow that becomes a lake.
@@ -177,15 +177,15 @@ export function makeTerrain(seed: number): Terrain {
     const h = height[i], t = temp[i], m = moist[i], lat = Math.abs(cy[i]);
     let k: number;
     if (h <= 0) k = lat > 0.9 + 0.04 * (m - 0.5) ? ICE : h > -0.9 ? SHALLOW : SEA;
-    else if (isLake[i]) k = t < -8 ? ICE : LAKE;
-    else if (isRiver[i]) k = t < -8 ? ICE : RIVER;
-    else if (t < -7) k = ICE;
+    else if (isLake[i]) k = t < -11 ? ICE : LAKE;
+    else if (isRiver[i]) k = t < -11 ? ICE : RIVER;
+    else if (t < -11) k = ICE;
     else if (h > 5.2) k = MOUNTAIN;
     else if (h < 0.3) k = BEACH;
     else if (t < 4) k = TUNDRA;
     else if (t > 19 && m < 0.33) k = DESERT;
     else if (t > 21 && m > 0.55) k = JUNGLE;
-    else if (m > 0.47) k = FOREST;
+    else if (m > 0.5) k = FOREST;
     else k = PLAINS;
     kind[i] = k;
     if (k === ICE && h <= 0) height[i] = 0.12;
