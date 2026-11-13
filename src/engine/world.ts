@@ -49,7 +49,7 @@ export function createWorld(seed: number): World {
     rain: 0, wet: 0.6, rainLeft: 0, droughtLeft: 0, coldLeft: 0, nextWeather: DAY * 0.9,
     temp: 12, sun: 0, night: 0, season: 0, growth: 1, riverRuns: true,
     ideas: [], placeNames: terrain.places.map(() => null), placeNamedBy: terrain.places.map(() => -1),
-    news: [], told: new Set(), meetings: [], talkMode: "auto",
+    news: [], told: new Set(), meetings: [], talks: [], talkMode: "auto",
     ledger: { given, grown: 0, burned: 0, lost: 0 },
     counts: [0, 0, 0, 0], placed: [0, 0, 0, 0], births: 0, deaths: 0,
     buckets: Array.from({ length: NB * NB }, () => []),

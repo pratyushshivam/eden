@@ -1,0 +1,232 @@
+/**
+ * The one place the language model is called from. It runs on the server side
+ * only (here, inside the Vite dev server), reads the key from the environment,
+ * and never passes it on. It is written as a plain function of a request body
+ * so it can later be moved as it stands into a serverless function.
+ *
+ * It does not accept prompts. It accepts facts about creatures and builds the
+ * prompt itself, so it cannot be used as an open door to the model.
+ *
+ * Spending is guarded here, not in the browser: every response's token counts
+ * are priced and added to a small file on disk, and calls are refused once the
+ * session or the total limit is reached.
+ */
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+
+/** DeepSeek's OpenAI-style endpoint and its cheaper chat model (checked 13 Nov 2026, api-docs.deepseek.com). */
+const ENDPOINT = "https://api.deepseek.com/chat/completions";
+const MODEL = "deepseek-flash";
+/** US dollars per million tokens, at the dearer (peak-hours) rate so the count never runs low. */
+const PRICE = { inMiss: 0.3, inHit: 0.006, out: 1.2 };
+
+/** The most this route will ever spend in total, whatever the environment says. */
+const HARD_TOTAL = 0.5;
+const MAX_BODY = 9000;
+const MAX_OUT = { voice: 240, talk: 340 };
+const MAX_AT_ONCE = 2;
+const MIN_GAP_MS = 1200;
+const MAX_PER_MINUTE = 24;
+
+export interface MindEnv {
+  apiKey: string | undefined;
+  /** Where the running total is kept. */
+  spendFile: string;
+  sessionLimit?: number;
+  totalLimit?: number;
+  log?: (line: string) => void;
+}
+
+export interface Spend {
+  session: number;
+  total: number;
+  sessionLimit: number;
+  totalLimit: number;
+  calls: number;
+  state: "ready" | "no_key" | "rejected" | "limit";
+}
+
+interface Ledger {
+  total_usd: number;
+  calls: number;
+  tokens_in: number;
+  tokens_out: number;
+}
+
+let session = 0;
+let sessionCalls = 0;
+let running = 0;
+let lastCall = 0;
+let recent: number[] = [];
+let rejected = false;
+
+function readLedger(file: string): Ledger {
+  try {
+    if (existsSync(file)) {
+      const j = JSON.parse(readFileSync(file, "utf8")) as Partial<Ledger>;
+      return { total_usd: Number(j.total_usd) || 0, calls: Number(j.calls) || 0, tokens_in: Number(j.tokens_in) || 0, tokens_out: Number(j.tokens_out) || 0 };
+    }
+  } catch {
+    // An unreadable file must never open the purse: treat it as fully spent.
+    return { total_usd: HARD_TOTAL, calls: 0, tokens_in: 0, tokens_out: 0 };
+  }
+  return { total_usd: 0, calls: 0, tokens_in: 0, tokens_out: 0 };
+}
+
+function limits(env: MindEnv): { sessionLimit: number; totalLimit: number } {
+  const totalLimit = Math.min(HARD_TOTAL, env.totalLimit && env.totalLimit > 0 ? env.totalLimit : HARD_TOTAL);
+  const sessionLimit = Math.min(totalLimit, env.sessionLimit && env.sessionLimit > 0 ? env.sessionLimit : 0.1);
+  return { sessionLimit, totalLimit };
+}
+
+export function spendReport(env: MindEnv): Spend {
+  const { sessionLimit, totalLimit } = limits(env);
+  const total = readLedger(env.spendFile).total_usd;
+  const state = !env.apiKey ? "no_key" : rejected ? "rejected" : session >= sessionLimit || total >= totalLimit ? "limit" : "ready";
+  return { session, total, sessionLimit, totalLimit, calls: sessionCalls, state };
+}
+
+const SYSTEM = `You give words to the kith: small upright folk on a little island. They have no borrowed knowledge. No science, no taught religion, no writing, no counting past a handful, no word for anything they have not met. They work the world out from what has happened to them, and they are often wrong in interesting ways. They wonder what the bright thing in the sky is, why the cold comes, where the dead go, who they are among their kin.
+
+Rules:
+- Use only the facts given. Never invent an event, a death, a place or a relative that is not in the facts.
+- Plain, concrete, short sentences. The voice of a being thinking aloud, not a poet and not a narrator.
+- Their own words for things: the sun is "the bright one" or a name they coin; a russet is a red hunter; dapples are the round grazers; skims are the white fliers.
+- Never mention anything modern, any technology, games, simulations, a maker or a watcher, numbers of days, or the words "island", "creature", "species", "kith" as a label for themselves (they say "we" or "my kind").
+- Names they coin are short and soft, one or two syllables (like Aru, Min, Tolo, Shai). Never a famous name.
+- Reply with one JSON object and nothing else.`;
+
+function clip(v: unknown, n: number): string {
+  return String(v ?? "").replace(/[\u0000-\u001f]+/g, " ").slice(0, n);
+}
+
+/** Builds the user message from the facts sent by the page. Everything is clipped. */
+function buildPrompt(kind: "voice" | "talk", facts: Record<string, unknown>): string {
+  const safe = JSON.stringify(facts, (_k, v) => (typeof v === "string" ? clip(v, 220) : v)).slice(0, 5200);
+  if (kind === "voice") {
+    return `Here is one of them, and everything that has really happened to it.
+
+${safe}
+
+Write what it is thinking now. JSON keys:
+"thought": two to four sentences, first person, about its own life as given: who it is among its kin, what it has seen, what it makes of it. If someone close has died, it may wonder where they went. Let the traits colour the voice.
+"name": ONLY if "name" above is null: the name it has come to call itself. Otherwise omit.
+"place_names": optional, at most one item {"id": <id from places>, "name": "<a short name it coins>"} for a place above whose name is null and which matters in its life. Omit if none.
+"saying": optional. One short general belief it has arrived at about the world (the bright one, the cold, the water, the dead, the red hunters), at most fourteen words, the kind of thing that could be repeated to others. Omit unless its life supports one.`;
+  }
+  return `Two of them have met. Here is each one, what has really happened to it, and what each could tell the other ("can_tell": things it believes that the other does not).
+
+${safe}
+
+Write the short exchange between them. JSON keys:
+"lines": three to five items {"who": "a" or "b", "text": "<what they say, one short sentence>"}. They speak of what matters now: food, water, danger, the weather, who has died, their names.
+"told": a list of what was actually passed on in those lines. For a belief taken from "can_tell": {"by": "a" or "b", "ref": "<its ref>", "place_id": <the place the LISTENER now thinks it is about>, "text": "<the belief as the listener would now say it, at most twelve words>"}. Usually place_id is the belief's own place; sometimes a listener mixes up two places, and then give the wrong one. Optionally also one of: {"by": ..., "kind": "follow" or "avoid", "who_id": <id of one of their kin named in the facts>, "text": ...} or {"by": ..., "kind": "lore", "text": "<a general saying about the world, at most fourteen words>"}. Use an empty list if nothing was passed on.
+"names": optional {"a": "<name>", "b": "<name>"}, only for one whose "name" above is null and who gives or is given a name in the talk.`;
+}
+
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 3);
+}
+
+export interface MindReply {
+  status: number;
+  json: Record<string, unknown>;
+}
+
+export async function handleMind(body: unknown, env: MindEnv): Promise<MindReply> {
+  const { sessionLimit, totalLimit } = limits(env);
+  const refuse = (reason: string, status = 200): MindReply => ({ status, json: { ok: false, reason, spend: spendReport(env) } });
+  if (!body || typeof body !== "object") return refuse("bad_request", 400);
+  const b = body as { kind?: unknown; facts?: unknown };
+  if (b.kind !== "voice" && b.kind !== "talk") return refuse("bad_request", 400);
+  if (!b.facts || typeof b.facts !== "object" || JSON.stringify(b.facts).length > MAX_BODY) return refuse("bad_request", 400);
+  if (!env.apiKey) return refuse("no_key");
+  if (rejected) return refuse("rejected");
+
+  const kind = b.kind;
+  const user = buildPrompt(kind, b.facts as Record<string, unknown>);
+  // Price the worst case before calling, so a call can never carry the total over the line.
+  const worst = (estimateTokens(SYSTEM + user) * PRICE.inMiss + MAX_OUT[kind] * PRICE.out) / 1e6;
+  const ledger = readLedger(env.spendFile);
+  if (session + worst > sessionLimit || ledger.total_usd + worst > totalLimit) return refuse("limit");
+
+  const now = Date.now();
+  recent = recent.filter((t) => now - t < 60_000);
+  if (running >= MAX_AT_ONCE || now - lastCall < MIN_GAP_MS || recent.length >= MAX_PER_MINUTE) return refuse("busy");
+  running++;
+  lastCall = now;
+  recent.push(now);
+  // Reserve the worst case while the call is in flight; settle to the real figure after.
+  session += worst;
+
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 25_000);
+  let cost = worst;
+  try {
+    const res = await fetch(ENDPOINT, {
+      method: "POST",
+      signal: ctl.signal,
+      headers: { "content-type": "application/json", authorization: `Bearer ${env.apiKey}` },
+      body: JSON.stringify({
+        model: MODEL,
+        messages: [{ role: "system", content: SYSTEM }, { role: "user", content: user }],
+        response_format: { type: "json_object" },
+        thinking: { type: "disabled" },
+        temperature: 1.1,
+        max_tokens: MAX_OUT[kind],
+        stream: false,
+      }),
+    });
+    if (res.status === 401 || res.status === 403) {
+      rejected = true;
+      cost = 0;
+      env.log?.(`mind: the key was rejected (${res.status}); using the plain voice from here on`);
+      return refuse("rejected");
+    }
+    if (res.status === 402) {
+      cost = 0;
+      rejected = true;
+      env.log?.("mind: the account has no balance left; using the plain voice from here on");
+      return refuse("rejected");
+    }
+    if (!res.ok) {
+      cost = 0;
+      env.log?.(`mind: the model service answered ${res.status}`);
+      return refuse("error");
+    }
+    const data = (await res.json()) as {
+      choices?: { message?: { content?: string } }[];
+      usage?: { prompt_tokens?: number; completion_tokens?: number; prompt_cache_hit_tokens?: number; prompt_cache_miss_tokens?: number };
+    };
+    const u = data.usage ?? {};
+    const tin = u.prompt_tokens ?? estimateTokens(SYSTEM + user);
+    const hit = u.prompt_cache_hit_tokens ?? 0;
+    const miss = u.prompt_cache_miss_tokens ?? tin - hit;
+    const tout = u.completion_tokens ?? MAX_OUT[kind];
+    cost = (miss * PRICE.inMiss + hit * PRICE.inHit + tout * PRICE.out) / 1e6;
+    const after = readLedger(env.spendFile);
+    after.total_usd += cost;
+    after.calls++;
+    after.tokens_in += tin;
+    after.tokens_out += tout;
+    writeFileSync(env.spendFile, JSON.stringify(after, null, 2));
+    sessionCalls++;
+    env.log?.(`mind: ${kind} ${tin} in (${hit} cached) ${tout} out  $${cost.toFixed(5)}  total $${after.total_usd.toFixed(4)}`);
+    let result: unknown = null;
+    try {
+      result = JSON.parse(data.choices?.[0]?.message?.content ?? "");
+    } catch {
+      return refuse("error");
+    }
+    if (!result || typeof result !== "object") return refuse("error");
+    session += cost - worst;
+    cost = worst; // already settled; keep the finally block from adjusting twice
+    return { status: 200, json: { ok: true, kind, result, spend: spendReport(env) } };
+  } catch {
+    cost = 0;
+    return refuse("error");
+  } finally {
+    clearTimeout(timer);
+    running--;
+    session += cost - worst;
+  }
+}

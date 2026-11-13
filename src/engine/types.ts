@@ -163,6 +163,17 @@ export interface Meeting {
   t: number;
 }
 
+/** A conversation between two kith. */
+export interface Talk {
+  t: number;
+  a: number;
+  b: number;
+  lines: { who: number; text: string }[];
+  /** Ideas that changed hands. */
+  ideas: number[];
+  by: "model" | "plain";
+}
+
 export interface Ledger {
   /** Energy present at the start plus everything the visitor has put in. */
   given: number;
@@ -217,6 +228,7 @@ export interface World {
   /** Kinds of news already told, for "the first time" entries. */
   told: Set<string>;
   meetings: Meeting[];
+  talks: Talk[];
   /** "auto": the engine settles meetings itself. "external": it queues them for whoever writes the words. */
   talkMode: "auto" | "external";
   ledger: Ledger;
