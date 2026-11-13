@@ -1,37 +1,80 @@
 /**
  * The simulation. Pure TypeScript, no DOM, fixed time step, one seeded random
  * generator: the same seed and the same visitor actions give the same history.
+ *
+ * The whole planet is stepped all the time. Nothing is paused for being out
+ * of sight.
  */
 import {
-  BERRY_E, BIRD, BUSH_MAX, DAY, DT, FISH_E, GRASS_E, GRAZER, IN, ISLAND_R, KITH, MAX_CREATURES, N, N_IN, N_OUT, N_VEC,
-  OUT, PREDATOR, SEASON_DAYS, SPECIES, THINK_EVERY, VEC, YEAR_DAYS, type Species,
+  BERRY_E, BUSH_MAX, CLEVER, DAY, DT, FISH_E, GRASS_E, GRID, HIDDEN, IN, KITH, MAX_CREATURES, N_IN, N_OUT, N_SPECIES, N_VEC, OUT, R,
+  SEASON_DAYS, SPECIES, THINKER, THINK_EVERY, TILT, VEC, YEAR_DAYS, type Species,
 } from "./config";
+import { CRAFTS, C_BASKET, C_BLADE, C_CLOAK, C_COOK, C_DIGGER, C_NET, C_POT, C_RAFT, C_SOW, C_SPEAR, C_STONEHUT, C_TORCH, M } from "./craft";
 import { founderBrain, inherit, think } from "./net";
 import { Rng } from "./rng";
-import { FOREST, HILLS, LAKE, RIVER, SEA, cellOf, makeTerrain, nearestPlace, placeAt } from "./terrain";
-import type { Creature, Held, Idea, LogKind, Meeting, Traits, World } from "./types";
+import { CELLS, cellOf, fbm3, grid } from "./sphere";
+import { BEACH, FOREST, ICE, JUNGLE, LAKE, MOUNTAIN, PLAINS, RIVER, SEA, SHALLOW, makeTerrain, nearestPlace, placeAt } from "./terrain";
+import type { Attempt, Creature, Held, Idea, LogKind, Meeting, Traits, World } from "./types";
 
-const B = 8; // bucket size
-const NB = Math.ceil(N / B);
-const WATER_SMELL = 64;
-const F_HUNGRY = 1;
-const F_PARCHED = 2;
-const F_WADED = 4;
-const F_GROWN = 8;
-const F_COLD = 16;
-const F_FLED = 32;
-const F_DROUGHT = 64;
+/** Regions for weather: each grid face cut into REGION x REGION. */
+export const REGION = 10;
+const N_REGION = 6 * REGION * REGION;
+const BS = 18; // bucket size, units
+const RR = R + 14;
+const BD = Math.ceil((2 * RR) / BS);
+const WATER_SMELL = 60;
+const F_HUNGRY = 1, F_PARCHED = 2, F_WADED = 4, F_GROWN = 8, F_COLD = 16, F_FLED = 32, F_DROUGHT = 64, F_SAILED = 128;
 
 const clamp01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v);
+const bucketOf = (x: number, y: number, z: number): number =>
+  ((((z * R + RR) / BS) | 0) * BD + (((y * R + RR) / BS) | 0)) * BD + (((x * R + RR) / BS) | 0);
+
+export const regionOf = (cell: number): number => {
+  const G = GRID;
+  const ix = cell % G, iy = ((cell / G) | 0) % G, f = (cell / (G * G)) | 0;
+  return (f * REGION + ((iy * REGION) / G | 0)) * REGION + ((ix * REGION) / G | 0);
+};
+
+/** Static lookups for a terrain: which trees, bushes and rocks are in each bucket of space. */
+interface Statics { trees: number[][]; bushes: number[][]; rocks: number[][]; regionMoist: Float32Array; regionX: Float32Array; regionY: Float32Array; regionZ: Float32Array }
+const staticsFor = new WeakMap<object, Statics>();
+function statics(w: World): Statics {
+  let s = staticsFor.get(w.terrain);
+  if (s) return s;
+  const t = w.terrain;
+  const mk = (): number[][] => Array.from({ length: BD * BD * BD }, () => []);
+  s = { trees: mk(), bushes: mk(), rocks: mk(), regionMoist: new Float32Array(N_REGION), regionX: new Float32Array(N_REGION), regionY: new Float32Array(N_REGION), regionZ: new Float32Array(N_REGION) };
+  t.trees.forEach((o, i) => (s as Statics).trees[bucketOf(o.x, o.y, o.z)].push(i));
+  t.bushes.forEach((o, i) => (s as Statics).bushes[bucketOf(o.x, o.y, o.z)].push(i));
+  t.rocks.forEach((o, i) => (s as Statics).rocks[bucketOf(o.x, o.y, o.z)].push(i));
+  const g = grid();
+  const n = new Float32Array(N_REGION);
+  for (let i = 0; i < CELLS; i++) {
+    const r = regionOf(i);
+    s.regionMoist[r] += t.moist[i];
+    s.regionX[r] += g.cx[i];
+    s.regionY[r] += g.cy[i];
+    s.regionZ[r] += g.cz[i];
+    n[r]++;
+  }
+  for (let r = 0; r < N_REGION; r++) {
+    s.regionMoist[r] /= n[r];
+    const l = Math.hypot(s.regionX[r], s.regionY[r], s.regionZ[r]);
+    s.regionX[r] /= l;
+    s.regionY[r] /= l;
+    s.regionZ[r] /= l;
+  }
+  staticsFor.set(w.terrain, s);
+  return s;
+}
 
 export function createWorld(seed: number): World {
   const terrain = makeTerrain(seed);
-  const rng = new Rng(seed);
-  const grass = new Float64Array(N * N);
-  const fish = new Float64Array(N * N).fill(-1);
-  const bush = new Float64Array(terrain.bushes.length).fill(2);
+  const grass = new Float64Array(CELLS);
+  const fish = new Float64Array(CELLS).fill(-1);
+  const bush = new Float64Array(terrain.bushes.length).fill(3);
   let given = 0;
-  for (let i = 0; i < N * N; i++) {
+  for (let i = 0; i < CELLS; i++) {
     grass[i] = terrain.fert[i] * 0.75;
     given += grass[i] * GRASS_E;
   }
@@ -39,48 +82,33 @@ export function createWorld(seed: number): World {
     fish[i] = 0.7;
     given += 0.7 * FISH_E;
   }
-  given += bush.length * 2 * BERRY_E;
+  given += bush.length * 3 * BERRY_E;
   const w: World = {
-    seed, terrain, rng,
+    seed, terrain, rng: new Rng(seed),
     t: DAY * 0.3, tick: 0,
     grass, bush, fish,
     creatures: [], byId: new Map(), gone: new Map(), nextId: 1,
-    fires: [], shelters: [], markers: [], carcasses: [], piles: [],
-    rain: 0, wet: 0.6, rainLeft: 0, droughtLeft: 0, coldLeft: 0, nextWeather: DAY * 0.9,
-    temp: 12, sun: 0, night: 0, season: 0, growth: 1, riverRuns: true,
+    fires: [], shelters: [], markers: [], carcasses: [], piles: [], blobs: [], novel: [],
+    rainGrid: new Float32Array(N_REGION), wetGrid: new Float32Array(N_REGION),
+    sunX: 1, sunY: 0, sunZ: 0, season: 0,
     ideas: [], placeNames: terrain.places.map(() => null), placeNamedBy: terrain.places.map(() => -1),
-    news: [], told: new Set(), meetings: [], talks: [], talkMode: "auto",
+    news: [], pings: [], told: new Set(), meetings: [], attempts: [], talks: [], talkMode: "auto",
     ledger: { given, grown: 0, burned: 0, lost: 0 },
-    counts: [0, 0, 0, 0], placed: [0, 0, 0, 0], births: 0, deaths: 0,
-    buckets: Array.from({ length: NB * NB }, () => []),
+    counts: new Array(N_SPECIES).fill(0), placed: new Array(N_SPECIES).fill(0), births: 0, deaths: 0,
+    records: Array.from({ length: N_SPECIES }, () => []),
+    dayStats: Array.from({ length: N_SPECIES }, () => ({ births: 0, deaths: 0, ageSum: 0 })),
+    buckets: Array.from({ length: BD * BD * BD }, () => []),
   };
-  // Lookup grids for trees and bushes.
-  treeGrid = Array.from({ length: NB * NB }, () => []);
-  bushGrid = Array.from({ length: NB * NB }, () => []);
-  terrain.trees.forEach((t, i) => treeGrid[((t.y / B) | 0) * NB + ((t.x / B) | 0)].push(i));
-  terrain.bushes.forEach((t, i) => bushGrid[((t.y / B) | 0) * NB + ((t.x / B) | 0)].push(i));
-  gridFor = terrain;
+  const st = statics(w);
+  for (let r = 0; r < N_REGION; r++) w.wetGrid[r] = 0.25 + 0.55 * st.regionMoist[r];
   environment(w);
   return w;
-}
-
-// Static lookups for the terrain in use (rebuilt if a different world steps).
-let treeGrid: number[][] = [];
-let bushGrid: number[][] = [];
-let gridFor: unknown = null;
-function ensureGrids(w: World): void {
-  if (gridFor === w.terrain) return;
-  treeGrid = Array.from({ length: NB * NB }, () => []);
-  bushGrid = Array.from({ length: NB * NB }, () => []);
-  w.terrain.trees.forEach((t, i) => treeGrid[((t.y / B) | 0) * NB + ((t.x / B) | 0)].push(i));
-  w.terrain.bushes.forEach((t, i) => bushGrid[((t.y / B) | 0) * NB + ((t.x / B) | 0)].push(i));
-  gridFor = w.terrain;
 }
 
 /** All the energy in the world right now. With the ledger, this must balance. */
 export function totalEnergy(w: World): number {
   let e = 0;
-  for (let i = 0; i < N * N; i++) e += w.grass[i] * GRASS_E;
+  for (let i = 0; i < CELLS; i++) e += w.grass[i] * GRASS_E;
   for (const i of w.terrain.fishCells) e += w.fish[i] * FISH_E;
   for (let i = 0; i < w.bush.length; i++) e += w.bush[i] * BERRY_E;
   for (const c of w.creatures) e += c.energy + SPECIES[c.sp].mass * c.traits.size;
@@ -92,27 +120,60 @@ export function totalEnergy(w: World): number {
 export const dayOf = (t: number): number => Math.floor(t / DAY);
 export const ageDays = (w: World, c: Creature): number => ((c.alive ? w.t : c.died) - c.born) / DAY;
 export const isAdult = (w: World, c: Creature): boolean => ageDays(w, c) >= SPECIES[c.sp].adultAt;
+/** Distance over the ground between two points given as unit vectors, in units. */
+export const arc = (ax: number, ay: number, az: number, bx: number, by: number, bz: number): number =>
+  Math.acos(Math.max(-1, Math.min(1, ax * bx + ay * by + az * bz))) * R;
 
-export function canStand(w: World, sp: Species, x: number, y: number): boolean {
-  if (Math.hypot(x - N / 2, y - N / 2) > N / 2 - 3) return false;
-  if (sp === BIRD) return true;
-  const i = cellOf(x, y);
-  const k = w.terrain.kind[i];
-  if (k === SEA) return w.terrain.height[i] > -0.22;
+/** How high the sun stands at a point: 1 overhead, 0 on the horizon, negative at night. */
+export const sunAt = (w: World, x: number, y: number, z: number): number => x * w.sunX + y * w.sunY + z * w.sunZ;
+const yearSwing = (w: World): number => Math.sin((((w.t / DAY) % YEAR_DAYS) / YEAR_DAYS - 0.125) * Math.PI * 2);
+
+/** Rain falling and warmth at a point, right now. */
+export function weatherAt(w: World, x: number, y: number, z: number): { rain: number; temp: number; dry: boolean } {
+  const cell = cellOf(x, y, z);
+  let rain = w.rainGrid[regionOf(cell)];
+  let temp = w.terrain.temp[cell] + 9 * y * yearSwing(w) + 5 * sunAt(w, x, y, z);
+  let dry = false;
+  for (const b of w.blobs) {
+    const d = arc(x, y, z, b.x, b.y, b.z);
+    if (d > b.r) continue;
+    if (b.kind === "rain") rain = Math.max(rain, 1 - (d / b.r) ** 3);
+    else if (b.kind === "cold") temp -= 14 * (1 - (d / b.r) ** 2);
+    else {
+      rain = 0;
+      dry = true;
+    }
+  }
+  return { rain, temp: temp - rain * 2, dry };
+}
+
+export function canStand(w: World, c: { sp: Species; knows: number }, x: number, y: number, z: number): boolean {
+  const def = SPECIES[c.sp];
+  if (def.air) return true;
+  const k = w.terrain.kind[cellOf(x, y, z)];
+  if (def.sea) return k === SEA || k === SHALLOW;
+  if (k === SEA) return (c.knows & (1 << C_RAFT)) !== 0;
   return true;
 }
 
 function log(w: World, c: Creature, k: LogKind, p = -1, o = -1, n = -1): void {
   c.log.push({ t: w.t, k, p, o, n });
-  if (c.log.length > 60) c.log.splice(8, 1); // keep the earliest memories, lose the middle
+  if (c.log.length > 70) c.log.splice(8, 1); // keep the earliest memories, lose the middle
 }
 
-function news(w: World, kind: string, a = -1, b = -1, p = -1, n = -1, once = ""): void {
+function ping(w: World, kind: string, x: number, y: number, z: number, who = -1, newsId = -1): void {
+  w.pings.push({ id: (w.pings[w.pings.length - 1]?.id ?? 0) + 1, t: w.t, kind, x, y, z, who, news: newsId });
+  if (w.pings.length > 60) w.pings.shift();
+}
+
+function news(w: World, kind: string, a = -1, b = -1, p = -1, n = -1, once = "", at?: { x: number; y: number; z: number }): void {
   if (once) {
     if (w.told.has(once)) return;
     w.told.add(once);
   }
   w.news.push({ id: w.news.length, t: w.t, kind, a, b, p, n });
+  const c = at ?? (a >= 0 ? w.byId.get(a) ?? w.gone.get(a) : undefined);
+  if (c) ping(w, kind, c.x, c.y, c.z, a, w.news.length - 1);
 }
 
 function makeTraits(rng: Rng, m?: Traits, f?: Traits): Traits {
@@ -135,19 +196,36 @@ function makeTraits(rng: Rng, m?: Traits, f?: Traits): Traits {
   };
 }
 
-function blank(w: World, sp: Species, x: number, y: number, traits: Traits, brain: Float32Array): Creature {
-  const a = w.rng.range(0, Math.PI * 2);
+/** A unit vector along the ground at p, in a random direction. */
+function randomTangent(rng: Rng, x: number, y: number, z: number): [number, number, number] {
+  for (;;) {
+    let a = rng.gauss(), b = rng.gauss(), c = rng.gauss();
+    const d = a * x + b * y + c * z;
+    a -= d * x;
+    b -= d * y;
+    c -= d * z;
+    const l = Math.hypot(a, b, c);
+    if (l > 0.1) return [a / l, b / l, c / l];
+  }
+}
+
+function blank(w: World, sp: Species, x: number, y: number, z: number, traits: Traits, brain: Float32Array): Creature {
+  const [hx, hy, hz] = randomTangent(w.rng, x, y, z);
+  const H = HIDDEN[SPECIES[sp].tier];
   return {
     id: w.nextId++, sp, sex: w.rng.next() < 0.5 ? 0 : 1,
-    x, y, z: 0, hx: Math.cos(a), hy: Math.sin(a), pace: 0,
-    energy: 0, thirst: 0.2, tired: 0.1, health: 1, born: w.t,
+    x, y, z, alt: 0, hx, hy, hz, pace: 0,
+    energy: 0, thirst: 0.2, tired: 0.1, health: 1, born: w.t, bx: x, by: y, bz: z,
     traits, brain,
-    inp: new Float32Array(N_IN), out: new Float32Array(N_OUT), tv: new Float32Array(N_VEC * 2),
-    mother: -1, father: -1, mate: -1, children: [], gen: 0,
-    homeX: x, homeY: y, waterX: -1, waterY: -1, callX: -1, callY: -1, wander: a,
+    inp: new Float32Array(N_IN), hid: new Float32Array(H), out: new Float32Array(N_OUT), tv: new Float32Array(N_VEC * 3),
+    mother: -1, father: -1, mate: -1, children: [], gen: 0, root: -1,
+    homeX: x, homeY: y, homeZ: z, waterX: 0, waterY: 0, waterZ: 0, hasWater: false, callX: 0, callY: 0, callZ: 0, hasCall: false,
+    wx: hx, wy: hy, wz: hz,
     state: 0, foodKind: 0, foodAt: -1,
-    mateCd: 0, talkCd: 0, markCd: 0, pause: 0, detour: 0, carrying: 0, follow: -1, avoid: -1,
-    flags: 0, seen: 0, at: new Uint16Array(16), samples: 0, name: null, log: [], beliefs: [], thoughts: [],
+    mateCd: 0, talkCd: 0, markCd: 0, tinkerCd: 0, pause: 0, detour: 0, carrying: 0, follow: -1, avoid: -1,
+    flags: 0, seen: 0, at: new Uint16Array(32), samples: 0, handled: 0, knows: 0, land: w.terrain.land[cellOf(x, y, z)], bornLand: w.terrain.land[cellOf(x, y, z)],
+    path: [x, y, z],
+    name: null, log: [], beliefs: [], thoughts: [],
     alive: true, died: 0, cause: "", kills: 0,
   };
 }
@@ -156,106 +234,109 @@ function admit(w: World, c: Creature): void {
   w.creatures.push(c);
   w.byId.set(c.id, c);
   w.counts[c.sp]++;
-  const p = placeAt(w.terrain, c.x, c.y);
+  const p = placeAt(w.terrain, c.x, c.y, c.z);
   if (p >= 0) c.seen |= 1 << p;
+}
+
+/** Thinkers near something the visitor did remember it as something that came from the sky. */
+function fromTheSky(w: World, x: number, y: number, z: number, kind: LogKind, n = -1, skip = -1): void {
+  for (const c of w.creatures) {
+    if (c.sp !== KITH || c.id === skip || arc(c.x, c.y, c.z, x, y, z) > 22) continue;
+    log(w, c, kind, placeAt(w.terrain, x, y, z), -1, n);
+  }
 }
 
 /**
  * The visitor sets a creature down. It arrives part-grown, with the founder
- * instincts of its kind. Returns null if the spot is no good.
+ * instincts of its kind. Returns null if the spot is no good for it.
  */
-export function place(w: World, sp: Species, x: number, y: number, age = 0.5): Creature | null {
-  if (!canStand(w, sp, x, y) || w.creatures.length >= MAX_CREATURES) return null;
+export function place(w: World, sp: Species, x: number, y: number, z: number, age = 0.6): Creature | null {
+  const l = Math.hypot(x, y, z);
+  x /= l;
+  y /= l;
+  z /= l;
+  if (!canStand(w, { sp, knows: 0 }, x, y, z) || w.creatures.length >= MAX_CREATURES) return null;
   const def = SPECIES[sp];
-  const c = blank(w, sp, x, y, makeTraits(w.rng), founderBrain(sp, w.rng));
+  const c = blank(w, sp, x, y, z, makeTraits(w.rng), founderBrain(sp, w.rng));
   // Placed creatures alternate female and male, so a handful can always breed.
   c.sex = (w.placed[sp]++ & 1) as 0 | 1;
   c.born = w.t - def.adultAt * DAY * age * 2;
   c.energy = def.maxEnergy * 0.7;
+  c.root = c.id;
   if (age >= 0.5) c.flags |= F_GROWN;
   c.mateCd = DAY * w.rng.range(0.4, 1.4);
+  if (def.air) c.alt = 3;
   w.ledger.given += c.energy + def.mass * c.traits.size;
   admit(w, c);
-  log(w, c, "placed", nearestPlace(w.terrain, x, y));
+  log(w, c, "placed", nearestPlace(w.terrain, x, y, z));
   news(w, "arrive", c.id, -1, -1, sp, "arrive" + sp);
+  w.novel.push({ x, y, z, t: w.t });
+  fromTheSky(w, x, y, z, sp === KITH ? "skyKin" : "skyBeast", sp, c.id);
   return c;
-}
-
-/** Sets down the first few of each kind, so a new world is not empty. */
-export function seedLife(w: World): void {
-  const t = w.terrain;
-  const r = w.rng;
-  const scatter = (sp: Species, n: number, cx: number, cy: number, spread: number): void => {
-    let made = 0;
-    for (let tries = 0; tries < n * 30 && made < n; tries++) {
-      const x = cx + r.gauss() * spread;
-      const y = cy + r.gauss() * spread;
-      const k = t.kind[cellOf(x, y)];
-      if (sp !== BIRD && (k === RIVER || k === SEA || k === LAKE)) continue;
-      if (place(w, sp, x, y, r.range(0.4, 0.9))) made++;
-    }
-  };
-  const meadows = t.places.filter((p) => p.kind === "meadow");
-  const woods = t.places.filter((p) => p.kind === "wood");
-  const m0 = meadows[0] ?? t.places[0];
-  const m1 = meadows[1] ?? m0;
-  scatter(GRAZER, 16, m0.x, m0.y, 5);
-  scatter(GRAZER, 14, m1.x, m1.y, 5);
-  const far = meadows[meadows.length - 1] ?? t.places[1];
-  scatter(PREDATOR, 5, far.x + 5, far.y + 5, 4);
-  scatter(BIRD, 10, t.lake.x, t.lake.y, 7);
-  const wd = woods[0] ?? m0;
-  // The folk begin between the lake and a wood.
-  scatter(KITH, 12, (t.lake.x * 2 + wd.x) / 3, (t.lake.y * 2 + wd.y) / 3, 4);
 }
 
 /* ---------------- the sky, the weather, the plants ---------------- */
 
 function environment(w: World): void {
-  const dayFrac = (w.t / DAY) % 1;
-  w.sun = -Math.cos(dayFrac * Math.PI * 2);
-  w.night = clamp01((0.12 - w.sun) / 0.32);
   const day = w.t / DAY;
-  w.season = Math.floor(day / SEASON_DAYS) % 4;
   const yearFrac = (day % YEAR_DAYS) / YEAR_DAYS;
-  const seasonal = 12 + 11 * Math.cos((yearFrac - 0.375) * Math.PI * 2);
-  w.temp = seasonal + 5 * w.sun - (w.coldLeft > 0 ? 13 : 0) - w.rain * 2;
-  w.growth = Math.min(1.2, Math.max(0.06, (seasonal - 2.5) / 13)) * (0.2 + 0.8 * w.wet);
-  w.riverRuns = w.wet > 0.1;
+  w.season = Math.floor(day / SEASON_DAYS) % 4;
+  // The planet turns under the sun once a day; over a year the sun swings north and south.
+  const dec = TILT * Math.sin((yearFrac - 0.125) * Math.PI * 2);
+  const a = -(day % 1) * Math.PI * 2;
+  w.sunX = Math.cos(dec) * Math.cos(a);
+  w.sunY = Math.sin(dec);
+  w.sunZ = Math.cos(dec) * Math.sin(a);
 }
 
+const REGION_STRIDE = 50;
 function weather(w: World): void {
-  if (w.coldLeft > 0) {
-    w.coldLeft -= DT;
-    if (w.coldLeft <= 0) news(w, "coldEnd");
+  const st = statics(w);
+  for (let i = w.blobs.length - 1; i >= 0; i--) {
+    const b = w.blobs[i];
+    b.left -= DT;
+    if (b.left <= 0) {
+      if (b.kind !== "rain") news(w, b.kind === "cold" ? "coldEnd" : "droughtEnd", -1, -1, -1, -1, "", b);
+      w.blobs.splice(i, 1);
+    }
   }
-  if (w.droughtLeft > 0) {
-    w.droughtLeft -= DT;
-    w.rainLeft = 0;
-    if (w.droughtLeft <= 0) news(w, "droughtEnd");
-  } else if (w.t >= w.nextWeather) {
-    // Rain comes more in spring and autumn.
-    const chance = [0.5, 0.26, 0.55, 0.42][w.season];
-    if (w.rng.next() < chance) w.rainLeft = DAY * w.rng.range(0.12, 0.4);
-    w.nextWeather = w.t + DAY * w.rng.range(0.35, 0.8);
+  while (w.novel.length && w.t - w.novel[0].t > DAY * 0.5) w.novel.shift();
+  // A slice of the regions each step: weather drifts over the planet as slow noise.
+  const dt = DT * REGION_STRIDE;
+  const drift = w.t * 0.0035;
+  for (let r = w.tick % REGION_STRIDE; r < N_REGION; r += REGION_STRIDE) {
+    const x = st.regionX[r], y = st.regionY[r], z = st.regionZ[r];
+    const n = fbm3(x * 2.3 + drift, y * 2.3 + 40, z * 2.3 - drift * 0.7, w.seed + 900, 3);
+    const edge = 0.71 - 0.22 * st.regionMoist[r];
+    let rain = clamp01((n - edge) / 0.1);
+    let dry = 1;
+    for (const b of w.blobs) {
+      const d = arc(x, y, z, b.x, b.y, b.z);
+      if (d > b.r + 8) continue;
+      if (b.kind === "rain") rain = 1;
+      else if (b.kind === "drought") {
+        rain = 0;
+        dry = 4;
+      }
+    }
+    w.rainGrid[r] = rain;
+    w.wetGrid[r] = clamp01(w.wetGrid[r] + (rain * 1.6 * dt) / DAY - (w.wetGrid[r] * dry * dt) / (DAY * 3.5));
   }
-  const target = w.rainLeft > 0 ? 1 : 0;
-  if (w.rainLeft > 0) w.rainLeft -= DT;
-  w.rain += (target - w.rain) * DT * 0.12;
-  if (w.rain < 0.002) w.rain = 0;
-  const dry = (w.droughtLeft > 0 ? 3.6 : 1) * (w.season === 1 ? 1.4 : 1) / (DAY * 3.2);
-  w.wet = clamp01(w.wet + (w.rain * 1.0) / DAY * DT - w.wet * dry * DT);
 }
 
 const STRIDE = 24;
 function plants(w: World): void {
   const { grass, ledger } = w;
-  const fert = w.terrain.fert;
+  const t = w.terrain;
+  const fert = t.fert;
+  const g3 = grid();
   const dt = DT * STRIDE;
-  const g = w.growth;
-  for (let i = w.tick % STRIDE; i < N * N; i += STRIDE) {
+  const swing = 9 * yearSwing(w);
+  for (let i = w.tick % STRIDE; i < CELLS; i += STRIDE) {
     const cap = fert[i];
     if (cap <= 0) continue;
+    const T = t.temp[i] + swing * g3.cy[i];
+    const g = Math.min(1.2, Math.max(0.05, (T - 2) / 14)) * (0.2 + 0.8 * w.wetGrid[regionOf(i)]);
     const v = grass[i];
     let d: number;
     if (g > 0.14) d = (0.009 * g * v * (1 - v / cap) + 0.0003 * cap * g) * dt;
@@ -265,16 +346,19 @@ function plants(w: World): void {
     if (d > 0) ledger.grown += d * GRASS_E;
     else ledger.lost -= d * GRASS_E;
   }
-  // Fish and berries, a slice at a time.
-  const fc = w.terrain.fishCells;
+  const fc = t.fishCells;
   for (let k = w.tick % STRIDE; k < fc.length; k += STRIDE) {
     const i = fc[k];
     const v = w.fish[i];
-    const d = Math.min(1 - v, (0.003 * v * (1 - v) + 0.0002) * (0.35 + 0.65 * Math.min(1, g * 1.4)) * dt);
+    const warm = Math.min(1, Math.max(0.25, (t.temp[i] + swing * g3.cy[i] + 4) / 18));
+    const d = Math.min(1 - v, (0.006 * v * (1 - v) + 0.0003) * warm * dt);
     w.fish[i] = v + d;
     ledger.grown += d * FISH_E;
   }
   for (let k = w.tick % STRIDE; k < w.bush.length; k += STRIDE) {
+    const b = t.bushes[k];
+    const T = t.temp[b.cell] + swing * b.y;
+    const g = Math.min(1.2, Math.max(0.05, (T - 2) / 14)) * (0.3 + 0.7 * w.wetGrid[regionOf(b.cell)]);
     const v = w.bush[k];
     if (g > 0.14) {
       const d = Math.min(BUSH_MAX - v, (g / (DAY * 0.5)) * dt);
@@ -291,12 +375,12 @@ function plants(w: World): void {
 function things(w: World): void {
   for (let i = w.fires.length - 1; i >= 0; i--) {
     const f = w.fires[i];
-    f.fuel -= DT * (1 + w.rain * 1.5);
+    f.fuel -= DT * (1 + w.rainGrid[regionOf(cellOf(f.x, f.y, f.z))] * 1.5);
     if (f.fuel <= 0) w.fires.splice(i, 1);
   }
   for (let i = w.shelters.length - 1; i >= 0; i--) {
     const s = w.shelters[i];
-    s.life -= DT;
+    s.life -= DT * (s.stone ? 0.25 : 1);
     if (s.life <= 0) w.shelters.splice(i, 1);
   }
   const rot = (list: { energy: number }[], rate: number): void => {
@@ -317,14 +401,18 @@ function things(w: World): void {
 
 /* ---------------- beliefs ---------------- */
 
-export function findIdea(w: World, kind: Idea["kind"], place: number, who: number, text = ""): Idea | undefined {
-  return w.ideas.find((i) => i.kind === kind && i.place === place && i.who === who && (kind !== "lore" || i.text === text));
+export function findIdea(w: World, kind: Idea["kind"], place: number, who: number, text = "", craft = -1, land = -1): Idea | undefined {
+  return w.ideas.find(
+    (i) => i.kind === kind && i.place === place && i.who === who && i.craft === craft && (kind !== "lore" || i.text === text) && (kind !== "craft" || i.land === land),
+  );
 }
 
-export function makeIdea(w: World, kind: Idea["kind"], place: number, who: number, origin: number, text = "", from = -1): Idea {
-  const found = findIdea(w, kind, place, who, text);
+export function makeIdea(w: World, kind: Idea["kind"], place: number, who: number, origin: number, text = "", from = -1, craft = -1): Idea {
+  const o = w.byId.get(origin);
+  const land = o ? o.land : -1;
+  const found = findIdea(w, kind, place, who, text, craft, land);
   if (found) return found;
-  const idea: Idea = { id: w.ideas.length, kind, place, who, text, origin, t: w.t, from, edges: [], beforeIn: 0, beforeTot: 0, afterIn: 0, afterTot: 0 };
+  const idea: Idea = { id: w.ideas.length, kind, place, who, craft, text, origin, t: w.t, land, from, edges: [], beforeIn: 0, beforeTot: 0, afterIn: 0, afterTot: 0 };
   w.ideas.push(idea);
   return idea;
 }
@@ -336,6 +424,11 @@ export function hold(w: World, c: Creature, idea: Idea, strength: number, from: 
     h.s = Math.min(1, Math.max(h.s, strength) + 0.1);
     return false;
   }
+  if (idea.kind === "craft") {
+    if (c.knows & (1 << idea.craft)) return false; // it already knows how, under another name
+    c.knows |= 1 << idea.craft;
+    strength = 1;
+  }
   // Believing a place is good and bad at once: the newer belief wins.
   if (idea.kind === "danger" || idea.kind === "good") {
     const other = idea.kind === "danger" ? "good" : "danger";
@@ -346,51 +439,62 @@ export function hold(w: World, c: Creature, idea: Idea, strength: number, from: 
     idea.beforeIn += c.at[idea.place];
     idea.beforeTot += c.samples;
   }
-  if (c.beliefs.length > 8) {
-    c.beliefs.sort((a, b) => b.s - a.s);
-    c.beliefs.length = 8;
+  if (c.beliefs.length > 14) {
+    // Things it can make are never forgotten; the faintest other belief goes.
+    let worst = -1, ws = 9;
+    c.beliefs.forEach((b, i) => {
+      if (w.ideas[b.idea].kind !== "craft" && b.s < ws) {
+        ws = b.s;
+        worst = i;
+      }
+    });
+    if (worst >= 0) c.beliefs.splice(worst, 1);
   }
   if (idea.kind === "follow") c.follow = idea.who;
   if (idea.kind === "avoid") c.avoid = idea.who;
   if (from >= 0) {
     idea.edges.push({ a: from, b: c.id, t: w.t });
-    const n = holders(w, idea.id);
-    if (n >= 3) news(w, "spread", idea.origin, -1, idea.place, idea.id, "spread" + idea.id);
+    if (holders(w, idea.id) >= 3) news(w, idea.kind === "craft" ? "craftSpread" : "spread", idea.origin, -1, idea.place, idea.id, "spread" + idea.id, c);
   }
   return true;
 }
 
 export function holders(w: World, ideaId: number): number {
   let n = 0;
-  for (const c of w.creatures) if (c.sp === KITH && c.beliefs.some((b) => b.idea === ideaId)) n++;
+  for (const c of w.creatures) if (c.beliefs.some((b) => b.idea === ideaId)) n++;
   return n;
 }
 
-function learn(w: World, c: Creature, kind: "danger" | "good", x: number, y: number, strength: number): void {
-  if (c.sp !== KITH) return;
-  const p = placeAt(w.terrain, x, y);
+/** What a creature's own life teaches it about a place. Clever animals remember; only thinkers can pass it on. */
+function learn(w: World, c: Creature, kind: "danger" | "good", strength: number): void {
+  if (SPECIES[c.sp].tier < CLEVER) return;
+  const p = placeAt(w.terrain, c.x, c.y, c.z);
   if (p < 0) return;
   const idea = makeIdea(w, kind, p, -1, c.id);
-  if (hold(w, c, idea, strength, -1)) log(w, c, "believed", p, -1, idea.id);
+  if (hold(w, c, idea, strength, -1) && c.sp === KITH) log(w, c, "believed", p, -1, idea.id);
 }
 
 /**
- * One tells another what it believes. Sometimes the listener takes it for a
- * different place: that is how a wrong idea starts. Returns the idea the
- * listener ended up with, or null if there was nothing new to tell.
+ * One tells another what it believes or knows how to make. Sometimes the
+ * listener takes a belief for a different place: that is how a wrong idea
+ * starts. Returns the idea the listener ended up with, or null if there was
+ * nothing new to tell.
  */
 export function tell(w: World, from: Creature, to: Creature, held?: Held): Idea | null {
-  const pick = held ?? from.beliefs.filter((b) => !to.beliefs.some((t) => t.idea === b.idea)).sort((a, b) => b.s - a.s)[0];
+  const pick =
+    held ??
+    from.beliefs
+      .filter((b) => !to.beliefs.some((t) => t.idea === b.idea) && !(w.ideas[b.idea].kind === "craft" && to.knows & (1 << w.ideas[b.idea].craft)))
+      .sort((a, b) => b.s - a.s)[0];
   if (!pick) return null;
   let idea = w.ideas[pick.idea];
   if ((idea.kind === "danger" || idea.kind === "good") && w.rng.next() < 0.12) {
-    // Misheard: the nearest other place of the same sort of ground.
+    // Misheard: the nearest other place.
     const here = w.terrain.places[idea.place];
-    let best = -1;
-    let bd = 1e9;
+    let best = -1, bd = 1e9;
     for (const p of w.terrain.places) {
       if (p.id === here.id) continue;
-      const d = Math.hypot(p.x - here.x, p.y - here.y) * (p.kind === here.kind ? 0.5 : 1);
+      const d = arc(p.x, p.y, p.z, here.x, here.y, here.z) * (p.kind === here.kind ? 0.5 : 1);
       if (d < bd) {
         bd = d;
         best = p.id;
@@ -400,7 +504,7 @@ export function tell(w: World, from: Creature, to: Creature, held?: Held): Idea 
   }
   if (!hold(w, to, idea, Math.max(0.35, pick.s * 0.75), from.id)) return null;
   log(w, from, "told", idea.place, to.id, idea.id);
-  log(w, to, "heard", idea.place, from.id, idea.id);
+  log(w, to, idea.kind === "craft" ? "learned" : "heard", idea.place, from.id, idea.id);
   news(w, "firstTold", from.id, to.id, idea.place, idea.id, "firstTold");
   return idea;
 }
@@ -414,19 +518,61 @@ export function settleMeeting(w: World, m: Meeting): void {
   if (!tell(w, elder, younger)) tell(w, younger, elder);
 }
 
+/* ---------------- making things ---------------- */
+
+/** What a kith could make right now from what it has handled and already knows. */
+export function craftOptions(c: Creature): number[] {
+  const out: number[] = [];
+  for (const k of CRAFTS) {
+    if (c.knows & (1 << k.id)) continue;
+    if ((c.handled & k.needs) !== k.needs || (c.knows & k.requires) !== k.requires) continue;
+    out.push(k.id);
+  }
+  return out;
+}
+
+/** A kith makes something for the first time in its life. `name` is what it calls the thing. */
+export function discover(w: World, c: Creature, craft: number, name = ""): Idea | null {
+  if (c.knows & (1 << craft) || !craftOptions(c).includes(craft)) return null;
+  const idea = makeIdea(w, "craft", -1, -1, c.id, name || CRAFTS[craft].plain, -1, craft);
+  if (!hold(w, c, idea, 1, -1)) return null;
+  const p = placeAt(w.terrain, c.x, c.y, c.z);
+  log(w, c, "made", p, -1, idea.id);
+  c.pause = 4;
+  c.state = 9;
+  news(w, idea.origin === c.id ? "invented" : "reinvented", c.id, -1, p, idea.id);
+  return idea;
+}
+
+/** Settles an attempt with no words: one of the possible things, picked by chance, under its plain name. */
+export function settleAttempt(w: World, a: Attempt): Idea | null {
+  const c = w.byId.get(a.who);
+  if (!c) return null;
+  const options = craftOptions(c).filter((o) => a.options.includes(o));
+  if (!options.length) return null;
+  return discover(w, c, options[w.rng.int(options.length)]);
+}
+
 /* ---------------- one creature ---------------- */
 
-const set = (tv: Float32Array, k: number, dx: number, dy: number): number => {
-  const d = Math.hypot(dx, dy);
-  if (d < 1e-4) {
-    tv[k * 2] = 0;
-    tv[k * 2 + 1] = 0;
+/** Fills slot k of tv with the unit direction along the ground from the creature to a point; returns the distance in units. */
+function aim(c: Creature, k: number, qx: number, qy: number, qz: number): number {
+  const dot = c.x * qx + c.y * qy + c.z * qz;
+  const dx = qx - c.x * dot, dy = qy - c.y * dot, dz = qz - c.z * dot;
+  const l = Math.hypot(dx, dy, dz);
+  const tv = c.tv;
+  if (l < 1e-5) {
+    tv[k * 3] = tv[k * 3 + 1] = tv[k * 3 + 2] = 0;
     return 0;
   }
-  tv[k * 2] = dx / d;
-  tv[k * 2 + 1] = dy / d;
-  return d;
-};
+  tv[k * 3] = dx / l;
+  tv[k * 3 + 1] = dy / l;
+  tv[k * 3 + 2] = dz / l;
+  return Math.acos(Math.max(-1, Math.min(1, dot))) * R;
+}
+
+const hunts = (c: Creature, o: Creature): boolean =>
+  SPECIES[c.sp].prey.includes(o.sp) || (c.sp === KITH && (c.knows & (1 << C_SPEAR)) !== 0 && (o.sp === 0 || o.sp === 3));
 
 function die(w: World, c: Creature, cause: string, by = -1): void {
   if (!c.alive) return;
@@ -435,29 +581,33 @@ function die(w: World, c: Creature, cause: string, by = -1): void {
   c.cause = cause;
   w.counts[c.sp]--;
   w.deaths++;
-  w.carcasses.push({ x: c.x, y: c.y, energy: c.energy + SPECIES[c.sp].mass * c.traits.size });
+  const st = w.dayStats[c.sp];
+  st.deaths++;
+  st.ageSum += (w.t - c.born) / DAY;
+  w.carcasses.push({ x: c.x, y: c.y, z: c.z, energy: c.energy + SPECIES[c.sp].mass * c.traits.size });
   c.energy = 0;
-  const p = placeAt(w.terrain, c.x, c.y);
-  news(w, "firstDeath", c.id, by, p, -1, "firstDeath");
-  if (c.sp === KITH) news(w, "kithDeath", c.id, by, p, -1, c.name ? "" : "kithDeath");
-  if (w.counts[c.sp] === 0) news(w, "lastOne", c.id, -1, p, c.sp);
-  // Those who were close to it remember.
-  const tellKin = (id: number, k: LogKind): void => {
+  const p = placeAt(w.terrain, c.x, c.y, c.z);
+  news(w, "firstDeath", c.id, by, p, -1, "firstDeath", c);
+  if (c.sp === KITH) news(w, "kithDeath", c.id, by, p, -1, "", c);
+  else if (SPECIES[c.sp].tier === CLEVER || cause === "killed") ping(w, "death", c.x, c.y, c.z, -1);
+  if (w.counts[c.sp] === 0) news(w, "lastOne", c.id, -1, p, c.sp, "", c);
+  // Those who were close to it remember, and the cleverer ones stop for a while.
+  const mourn = (id: number, k: LogKind): void => {
     const o = w.byId.get(id);
-    if (o && o.alive) {
-      log(w, o, k, p, c.id);
-      if (o.mate === c.id) o.mate = -1;
+    if (!o || !o.alive) return;
+    log(w, o, k, p, c.id);
+    if (o.mate === c.id) o.mate = -1;
+    if (SPECIES[o.sp].tier >= CLEVER && arc(o.x, o.y, o.z, c.x, c.y, c.z) < 14) {
+      o.pause = 7;
+      o.state = 8;
     }
   };
-  if (c.mate >= 0) tellKin(c.mate, "lostMate");
+  if (c.mate >= 0) mourn(c.mate, "lostMate");
   if (ageDays(w, c) < SPECIES[c.sp].adultAt * 1.5) {
-    tellKin(c.mother, "lostChild");
-    tellKin(c.father, "lostChild");
+    mourn(c.mother, "lostChild");
+    mourn(c.father, "lostChild");
   }
-  for (const k of c.children) {
-    const o = w.byId.get(k);
-    if (o && o.alive && o.sp === KITH) log(w, o, "lostParent", p, c.id);
-  }
+  for (const k of c.children) mourn(k, "lostParent");
 }
 
 function birth(w: World, m: Creature, f: Creature): void {
@@ -469,30 +619,44 @@ function birth(w: World, m: Creature, f: Creature): void {
   if (m.energy < mShare + 12 || f.energy < fShare + 12) return;
   m.energy -= mShare;
   f.energy -= fShare;
-  const a = w.rng.range(0, Math.PI * 2);
-  let x = m.x + Math.cos(a) * 0.7;
-  let y = m.y + Math.sin(a) * 0.7;
-  if (!canStand(w, m.sp, x, y)) {
-    x = m.x;
-    y = m.y;
+  const c = blank(w, m.sp, m.x, m.y, m.z, traits, inherit(m.brain, f.brain, w.rng));
+  c.x += c.hx * (0.7 / R);
+  c.y += c.hy * (0.7 / R);
+  c.z += c.hz * (0.7 / R);
+  const l = Math.hypot(c.x, c.y, c.z);
+  c.x /= l;
+  c.y /= l;
+  c.z /= l;
+  if (!canStand(w, c, c.x, c.y, c.z)) {
+    c.x = m.x;
+    c.y = m.y;
+    c.z = m.z;
   }
-  const c = blank(w, m.sp, x, y, traits, inherit(m.brain, f.brain, w.rng));
+  c.bx = c.x;
+  c.by = c.y;
+  c.bz = c.z;
+  c.path = [c.x, c.y, c.z];
   c.energy = def.birthEnergy;
   c.mother = m.id;
   c.father = f.id;
   c.gen = Math.max(m.gen, f.gen) + 1;
+  c.root = m.root;
   c.homeX = m.homeX;
   c.homeY = m.homeY;
+  c.homeZ = m.homeZ;
   c.waterX = m.waterX;
   c.waterY = m.waterY;
+  c.waterZ = m.waterZ;
+  c.hasWater = m.hasWater;
   c.follow = m.id;
-  c.z = m.z;
+  c.alt = m.alt;
   admit(w, c);
   w.births++;
+  w.dayStats[m.sp].births++;
   m.children.push(c.id);
   f.children.push(c.id);
   m.mateCd = f.mateCd = def.mateEvery * DAY * w.rng.range(0.8, 1.25);
-  const p = nearestPlace(w.terrain, x, y);
+  const p = nearestPlace(w.terrain, c.x, c.y, c.z);
   log(w, c, "born", p, m.id, f.id);
   if (m.mate !== f.id) {
     m.mate = f.id;
@@ -503,7 +667,8 @@ function birth(w: World, m: Creature, f: Creature): void {
   log(w, m, "child", p, c.id);
   log(w, f, "child", p, c.id);
   news(w, "firstBirth", c.id, m.id, p, m.sp, "firstBirth" + m.sp);
-  if (c.gen === 3 || c.gen === 6 || c.gen === 10 || c.gen === 15) news(w, "generation", c.id, -1, p, c.gen, `gen${m.sp}-${c.gen}`);
+  if (def.tier >= CLEVER) ping(w, "birth", c.x, c.y, c.z, c.id);
+  if (c.gen === 3 || c.gen === 6 || c.gen === 10 || c.gen === 15 || c.gen === 25) news(w, "generation", c.id, -1, p, c.gen, `gen${m.sp}-${c.gen}`);
 }
 
 /** Parent and child, or children of the same mother: these do not pair. */
@@ -511,231 +676,277 @@ function closeKin(a: Creature, b: Creature): boolean {
   return a.mother === b.id || a.father === b.id || b.mother === a.id || b.father === a.id || (a.mother >= 0 && a.mother === b.mother);
 }
 
+function nearFire(w: World, x: number, y: number, z: number, r: number): boolean {
+  for (const f of w.fires) if (arc(f.x, f.y, f.z, x, y, z) < r) return true;
+  return false;
+}
+
 /** Looks around, fills the senses, runs the network, and does the once-in-a-while things. */
 function sense(w: World, c: Creature, idx: number): void {
   const t = w.terrain;
+  const st = statics(w);
   const def = SPECIES[c.sp];
   const sp = c.sp;
   const inp = c.inp;
   const tv = c.tv;
-  const cell = cellOf(c.x, c.y);
+  const cell = cellOf(c.x, c.y, c.z);
   const kindHere = t.kind[cell];
-  const range = def.sense * c.traits.sense * (sp === PREDATOR ? 1 : 1 - 0.3 * w.night);
+  const sun = sunAt(w, c.x, c.y, c.z);
+  const night = clamp01((0.12 - sun) / 0.32);
+  const wx = weatherAt(w, c.x, c.y, c.z);
+  const torch = (c.knows & (1 << C_TORCH)) !== 0;
+  const range = def.sense * c.traits.sense * (def.prey.length || torch ? 1 : 1 - 0.3 * night);
   const r2 = range * range;
+  const R2 = R * R;
   tv.fill(0);
+  const adult = (c.flags & F_GROWN) !== 0;
+  const tier = def.tier;
 
   // --- others nearby
-  let kinN = 0, kinX = 0, kinY = 0, kinD = 1e9;
-  let threatD = 1e9, threatX = 0, threatY = 0, threat: Creature | null = null;
+  let kinN = 0, kinX = 0, kinY = 0, kinZ = 0, kinD = 1e9;
+  let threatD = 1e9, threat: Creature | null = null, tX = 0, tY = 0, tZ = 0;
   let preyD = 1e9, prey: Creature | null = null;
   let mateD = 1e9, mateC: Creature | null = null;
   let talk: Creature | null = null;
-  const bx0 = Math.max(0, ((c.x - range) / B) | 0), bx1 = Math.min(NB - 1, ((c.x + range) / B) | 0);
-  const by0 = Math.max(0, ((c.y - range) / B) | 0), by1 = Math.min(NB - 1, ((c.y + range) / B) | 0);
-  const adult = (c.flags & F_GROWN) !== 0;
-  for (let by = by0; by <= by1; by++)
-    for (let bx = bx0; bx <= bx1; bx++) {
-      const bucket = w.buckets[by * NB + bx];
-      for (let q = 0; q < bucket.length; q++) {
-        const j = bucket[q];
-        if (j === idx) continue;
-        const o = w.creatures[j];
-        if (!o.alive) continue;
-        const dx = o.x - c.x, dy = o.y - c.y;
-        const d2 = dx * dx + dy * dy;
-        if (d2 > r2) continue;
-        if (o.sp === sp) {
-          kinX += dx;
-          kinY += dy;
-          kinN++;
-          if (d2 < kinD) kinD = d2;
-          if (adult && o.sex !== c.sex && d2 < mateD && (o.flags & F_GROWN) !== 0 && !closeKin(c, o)) {
-            mateD = d2;
-            mateC = o;
-          }
-          if (sp === KITH && adult && d2 < 6.5 && o.talkCd <= 0 && (o.flags & F_GROWN) !== 0) talk = o;
-          if (sp === KITH && o.id === c.avoid && d2 < 36 && d2 < threatD) {
-            threatD = d2 * 4; // unease, not terror
-            threatX = dx;
-            threatY = dy;
-          }
-        } else if (o.sp === PREDATOR && (sp === GRAZER || sp === KITH)) {
-          if (d2 < threatD) {
-            threatD = d2;
-            threatX = dx;
-            threatY = dy;
-            threat = o;
-          }
-        } else if (sp === PREDATOR && (o.sp === GRAZER || o.sp === KITH)) {
-          // Prey is hard to see in the trees, and folk are a second choice.
-          const ok = t.kind[cellOf(o.x, o.y)] === FOREST ? d2 < r2 * 0.3 : true;
-          const eff = o.sp === KITH ? d2 * 4 : d2;
-          if (ok && eff < preyD && !nearFire(w, o.x, o.y, 4.5)) {
-            preyD = eff;
-            prey = o;
+  const lo = (v: number): number => Math.max(0, ((v * R - range + RR) / BS) | 0);
+  const hi = (v: number): number => Math.min(BD - 1, ((v * R + range + RR) / BS) | 0);
+  const x0 = lo(c.x), x1 = hi(c.x), y0 = lo(c.y), y1 = hi(c.y), z0 = lo(c.z), z1 = hi(c.z);
+  for (let bz = z0; bz <= z1; bz++)
+    for (let by = y0; by <= y1; by++)
+      for (let bx = x0; bx <= x1; bx++) {
+        const bucket = w.buckets[(bz * BD + by) * BD + bx];
+        for (let q = 0; q < bucket.length; q++) {
+          const j = bucket[q];
+          if (j === idx) continue;
+          const o = w.creatures[j];
+          if (!o.alive) continue;
+          const dx = o.x - c.x, dy = o.y - c.y, dz = o.z - c.z;
+          const d2 = (dx * dx + dy * dy + dz * dz) * R2;
+          if (d2 > r2) continue;
+          if (o.sp === sp) {
+            kinX += o.x;
+            kinY += o.y;
+            kinZ += o.z;
+            kinN++;
+            if (d2 < kinD) kinD = d2;
+            if (adult && o.sex !== c.sex && d2 < mateD && (o.flags & F_GROWN) !== 0 && !closeKin(c, o)) {
+              mateD = d2;
+              mateC = o;
+            }
+            if (sp === KITH && adult && d2 < 6.5 && o.talkCd <= 0 && (o.flags & F_GROWN) !== 0) talk = o;
+            if (o.id === c.avoid && d2 < 36 && d2 * 4 < threatD) {
+              threatD = d2 * 4; // unease, not terror
+              tX = o.x;
+              tY = o.y;
+              tZ = o.z;
+            }
+          } else if (hunts(o, c)) {
+            if (d2 < threatD) {
+              threatD = d2;
+              tX = o.x;
+              tY = o.y;
+              tZ = o.z;
+              threat = o;
+            }
+          } else if (hunts(c, o)) {
+            // Prey is hard to see in the trees, and folk are a second choice.
+            const ko = t.kind[cellOf(o.x, o.y, o.z)];
+            const ok = ko === FOREST || ko === JUNGLE ? d2 < r2 * 0.3 : true;
+            const eff = o.sp === KITH ? d2 * 4 : d2;
+            const lit = o.sp === KITH && (o.knows & (1 << C_TORCH)) !== 0;
+            if (ok && eff < preyD && !lit && !nearFire(w, o.x, o.y, o.z, 4.5)) {
+              preyD = eff;
+              prey = o;
+            }
           }
         }
       }
-    }
 
-  // --- fire and shelter (warmth for folk, fright for russets)
-  let warmD = 1e9, warmX = 0, warmY = 0;
-  if (sp === KITH || sp === PREDATOR) {
+  // --- fire and shelter (warmth for folk, fright for hunters)
+  let warmD = 1e9, warmX = 0, warmY = 0, warmZ = 0;
+  if (sp === KITH || def.prey.length) {
     for (const f of w.fires) {
-      const dx = f.x - c.x, dy = f.y - c.y;
-      const d2 = dx * dx + dy * dy;
-      if (d2 < warmD) {
-        warmD = d2;
-        warmX = dx;
-        warmY = dy;
+      const d = arc(f.x, f.y, f.z, c.x, c.y, c.z);
+      if (d < warmD) {
+        warmD = d;
+        warmX = f.x;
+        warmY = f.y;
+        warmZ = f.z;
       }
     }
-    if (sp === PREDATOR) {
-      if (warmD < 49 && warmD < threatD) {
-        threatD = warmD;
-        threatX = warmX;
-        threatY = warmY;
+    if (sp !== KITH) {
+      if (warmD < 7 && warmD * warmD < threatD) {
+        threatD = warmD * warmD;
+        tX = warmX;
+        tY = warmY;
+        tZ = warmZ;
       }
     } else {
       for (const s of w.shelters) {
         if (!s.done) continue;
-        const dx = s.x - c.x, dy = s.y - c.y;
-        const d2 = dx * dx + dy * dy;
-        if (d2 < warmD) {
-          warmD = d2;
-          warmX = dx;
-          warmY = dy;
+        const d = arc(s.x, s.y, s.z, c.x, c.y, c.z);
+        if (d < warmD) {
+          warmD = d;
+          warmX = s.x;
+          warmY = s.y;
+          warmZ = s.z;
         }
       }
     }
   }
-  const warmth = sp === KITH && warmD < 16 ? 1 - Math.sqrt(warmD) / 4 : 0;
+  const warmth = sp === KITH && warmD < 4 ? 1 - warmD / 4 : 0;
 
   // --- food
   let foodV = 0;
   c.foodKind = 0;
   c.foodAt = -1;
-  if (sp === PREDATOR) {
-    let best = 1e9;
+  // A basis along the ground for looking around: ahead and to the side.
+  const sx = c.y * c.hz - c.z * c.hy, sy = c.z * c.hx - c.x * c.hz, sz = c.x * c.hy - c.y * c.hx;
+  const look = (a: number, dist: number): number => {
+    const k = dist / R, ca = Math.cos(a) * k, sa = Math.sin(a) * k;
+    lx = c.x + c.hx * ca + sx * sa;
+    ly = c.y + c.hy * ca + sy * sa;
+    lz = c.z + c.hz * ca + sz * sa;
+    return cellOf(lx, ly, lz);
+  };
+  let lx = 0, ly = 0, lz = 0;
+  const canCarrion = def.carrion || (sp === KITH && (c.knows & (1 << C_BLADE)) !== 0);
+  if (canCarrion) {
+    let best = r2;
     for (let k = 0; k < w.carcasses.length; k++) {
       const l = w.carcasses[k];
-      const dx = l.x - c.x, dy = l.y - c.y;
-      const d2 = dx * dx + dy * dy;
-      if (d2 < r2 && d2 < best && l.energy > 2) {
+      const dx = l.x - c.x, dy = l.y - c.y, dz = l.z - c.z;
+      const d2 = (dx * dx + dy * dy + dz * dz) * R2;
+      if (d2 < best && l.energy > 2) {
         best = d2;
-        set(tv, VEC.food, dx, dy);
+        aim(c, VEC.food, l.x, l.y, l.z);
         c.foodKind = 4;
         c.foodAt = k;
       }
     }
-    if (best < 1e9) foodV = 1 - Math.sqrt(best) / range;
-    else if (prey) {
-      set(tv, VEC.food, prey.x - c.x, prey.y - c.y);
-      foodV = 1 - Math.sqrt(Math.min(preyD, r2)) / range;
-    }
-  } else if (sp === BIRD) {
+    if (c.foodKind === 4) foodV = 1 - Math.sqrt(best) / range;
+  }
+  if (!c.foodKind && prey) {
+    aim(c, VEC.food, prey.x, prey.y, prey.z);
+    foodV = 1 - Math.sqrt(Math.min(preyD, r2)) / range;
+  }
+  const canFish = def.fish || (sp === KITH && (c.knows & (1 << C_NET)) !== 0);
+  if (!c.foodKind && canFish && !(sp === KITH && foodV > 0)) {
     let best = w.fish[cell] > 0 ? w.fish[cell] : 0;
-    let bx = 0, by = 0;
+    let bx = 0, by = 0, bz = 0, found = false;
     if (best > 0.2) {
       c.foodKind = 5;
       c.foodAt = cell;
     }
     for (let k = 0; k < 18; k++) {
-      const a = c.wander + k * 1.047;
-      const rr = range * (k < 6 ? 0.3 : k < 12 ? 0.8 : 1.5);
-      const x = c.x + Math.cos(a) * rr, y = c.y + Math.sin(a) * rr;
-      const v = w.fish[cellOf(x, y)] * (k < 6 ? 1 : 0.85);
+      const ci = look(k * 1.047 + c.id, range * (k < 6 ? 0.3 : k < 12 ? 0.8 : 1.5));
+      const v = w.fish[ci] * (k < 6 ? 1 : 0.85);
       if (v > best + 0.15) {
         best = v;
-        bx = x - c.x;
-        by = y - c.y;
+        bx = lx;
+        by = ly;
+        bz = lz;
+        found = true;
       }
     }
-    if (bx !== 0 || by !== 0) set(tv, VEC.food, bx, by);
-    foodV = clamp01(best);
-  } else {
+    if (found) aim(c, VEC.food, bx, by, bz);
+    if (best > foodV) foodV = clamp01(best) * (sp === KITH ? 0.6 : 1);
+  }
+  if (def.grass > 0 && c.foodKind !== 4) {
     // Grass under foot and around.
     let best = w.grass[cell];
-    let bx = 0, by = 0;
-    if (best > 0.1) {
+    let bx = 0, by = 0, bz = 0, found = false;
+    if (best > 0.1 && !c.foodKind) {
       c.foodKind = 1;
       c.foodAt = cell;
     }
     for (let k = 0; k < 12; k++) {
-      const a = c.wander + k * 0.5236;
-      const rr = k & 1 ? 2.2 : range * 0.6;
-      const x = c.x + Math.cos(a) * rr, y = c.y + Math.sin(a) * rr;
-      const v = w.grass[cellOf(x, y)] * (k & 1 ? 1 : 0.85);
+      const ci = look(k * 0.5236 + c.id, k & 1 ? 2.6 : range * 0.6);
+      const v = w.grass[ci] * (k & 1 ? 1 : 0.85);
       if (v > best + 0.12) {
         best = v;
-        bx = x - c.x;
-        by = y - c.y;
+        bx = lx;
+        by = ly;
+        bz = lz;
+        found = true;
       }
     }
-    foodV = clamp01(best) * (sp === KITH ? 0.45 : 1);
-    if (bx !== 0 || by !== 0) set(tv, VEC.food, bx, by);
-    if (sp === KITH) {
-      // Berries are much better than grass: head for the fullest bush that is not too far.
-      let bestScore = foodV;
-      for (let gy = by0; gy <= by1; gy++)
-        for (let gx = bx0; gx <= bx1; gx++) {
-          const g = bushGrid[gy * NB + gx];
+    const gv = clamp01(best) * (def.grass < 0.7 ? 0.45 : 1);
+    if (gv > foodV) {
+      foodV = gv;
+      if (found) aim(c, VEC.food, bx, by, bz);
+      else tv[0] = tv[1] = tv[2] = 0;
+    }
+  }
+  if (def.fruit && c.foodKind !== 4) {
+    // Fruit is much better than grass: head for the fullest bush that is not too far.
+    let bestScore = foodV;
+    for (let bz = z0; bz <= z1; bz++)
+      for (let by = y0; by <= y1; by++)
+        for (let bx = x0; bx <= x1; bx++) {
+          const g = st.bushes[(bz * BD + by) * BD + bx];
           for (let q = 0; q < g.length; q++) {
             const stock = w.bush[g[q]];
             if (stock < 0.5) continue;
             const b = t.bushes[g[q]];
-            const dx = b.x - c.x, dy = b.y - c.y;
-            const d2 = dx * dx + dy * dy;
+            const dx = b.x - c.x, dy = b.y - c.y, dz = b.z - c.z;
+            const d2 = (dx * dx + dy * dy + dz * dz) * R2;
             if (d2 > r2) continue;
             const score = (0.3 + (0.7 * stock) / BUSH_MAX) * (1 - (Math.sqrt(d2) / range) * 0.5);
             if (score > bestScore) {
               bestScore = score;
               c.foodKind = 2;
               c.foodAt = g[q];
-              set(tv, VEC.food, dx, dy);
+              aim(c, VEC.food, b.x, b.y, b.z);
             }
           }
         }
-      foodV = bestScore;
-    }
+    foodV = bestScore;
+  }
+  if ((def.grass > 0 || def.fruit) && c.foodKind !== 4) {
     for (let k = 0; k < w.piles.length; k++) {
       const l = w.piles[k];
-      const dx = l.x - c.x, dy = l.y - c.y;
-      const d2 = dx * dx + dy * dy;
-      if (d2 < r2 && l.energy > 2) {
+      const dx = l.x - c.x, dy = l.y - c.y, dz = l.z - c.z;
+      if ((dx * dx + dy * dy + dz * dz) * R2 < r2 && l.energy > 2) {
         c.foodKind = 3;
         c.foodAt = k;
-        set(tv, VEC.food, dx, dy);
+        aim(c, VEC.food, l.x, l.y, l.z);
         foodV = 1;
         break;
       }
     }
   }
 
-  // --- water: by sight within range, otherwise from memory
-  const fd = w.riverRuns ? t.freshDist[cell] : t.lakeDist[cell];
-  const fn = w.riverRuns ? t.freshNear[cell] : t.lakeNear[cell];
+  // --- water: smelt from far off, otherwise from memory
+  const g3 = grid();
+  const fd = wx.dry && kindHere !== LAKE ? t.freshDist[cell] + 6 : t.freshDist[cell];
+  const fn = t.freshNear[cell];
   let waterV = 0;
-  // Water can be smelt from much further off than anything can be seen.
   if (fd < WATER_SMELL && fn >= 0) {
-    if (fd > 1.2) set(tv, VEC.water, (fn % N) + 0.5 - c.x, ((fn / N) | 0) + 0.5 - c.y);
+    if (fd > 1.4) aim(c, VEC.water, g3.cx[fn], g3.cy[fn], g3.cz[fn]);
     waterV = 1 - fd / WATER_SMELL;
-  } else if (c.waterX >= 0) {
-    set(tv, VEC.water, c.waterX - c.x, c.waterY - c.y);
+  } else if (c.hasWater) {
+    aim(c, VEC.water, c.waterX, c.waterY, c.waterZ);
     waterV = 0.12;
   }
 
   // --- kin, threat, home, wander
-  if (kinN > 0) set(tv, VEC.kin, kinX / kinN, kinY / kinN);
+  if (kinN > 0) aim(c, VEC.kin, kinX, kinY, kinZ);
   const fear = threatD < r2 ? Math.pow(1 - Math.sqrt(threatD) / range, 0.6) : 0;
-  if (fear > 0) set(tv, VEC.threat, threatX, threatY);
-  const homeD = set(tv, VEC.home, c.homeX - c.x, c.homeY - c.y);
-  c.wander += w.rng.gauss() * 0.45;
-  // Keep the wandering inland when near the edge of the world.
-  const cx = c.x - N / 2, cy = c.y - N / 2;
-  if (cx * cx + cy * cy > (ISLAND_R - 6) * (ISLAND_R - 6) && sp !== BIRD) c.wander = Math.atan2(-cy, -cx) + w.rng.gauss() * 0.6;
-  tv[VEC.wander * 2] = Math.cos(c.wander);
-  tv[VEC.wander * 2 + 1] = Math.sin(c.wander);
+  if (fear > 0) aim(c, VEC.threat, tX, tY, tZ);
+  const homeD = aim(c, VEC.home, c.homeX, c.homeY, c.homeZ);
+  // The wandering direction turns a little at a time, and is kept along the ground.
+  const turn = w.rng.gauss() * 0.45;
+  const ux = c.y * c.wz - c.z * c.wy, uy = c.z * c.wx - c.x * c.wz, uz = c.x * c.wy - c.y * c.wx;
+  let nx = c.wx + ux * turn, ny = c.wy + uy * turn, nz = c.wz + uz * turn;
+  const nd = nx * c.x + ny * c.y + nz * c.z;
+  nx -= nd * c.x;
+  ny -= nd * c.y;
+  nz -= nd * c.z;
+  const nl = Math.hypot(nx, ny, nz) || 1;
+  c.wx = tv[VEC.wander * 3] = nx / nl;
+  c.wy = tv[VEC.wander * 3 + 1] = ny / nl;
+  c.wz = tv[VEC.wander * 3 + 2] = nz / nl;
 
   // --- whom to keep near
   let followV = 0;
@@ -743,73 +954,84 @@ function sense(w: World, c: Creature, idx: number): void {
   if (fid >= 0) {
     const o = w.byId.get(fid);
     if (o && o.alive) {
-      const d = set(tv, VEC.follow, o.x - c.x, o.y - c.y);
+      const d = aim(c, VEC.follow, o.x, o.y, o.z);
       followV = d < 1.5 ? 0 : clamp01(1 - d / 30);
-      if (d < 1.5) tv[VEC.follow * 2] = tv[VEC.follow * 2 + 1] = 0;
+      if (d < 1.5) tv[VEC.follow * 3] = tv[VEC.follow * 3 + 1] = tv[VEC.follow * 3 + 2] = 0;
     } else if (c.follow === fid) c.follow = -1;
   } else if (mateC && adult) {
-    set(tv, VEC.follow, mateC.x - c.x, mateC.y - c.y);
+    aim(c, VEC.follow, mateC.x, mateC.y, mateC.z);
     followV = 1 - Math.sqrt(mateD) / range;
   } else if (adult && c.mateCd <= 0 && (w.tick + c.id) % (THINK_EVERY * 8) < THINK_EVERY) {
     // Nobody in sight: a call carries much further than eyes do.
-    let best = 70 * 70;
+    let best = 70;
+    c.hasCall = false;
     for (const o of w.creatures) {
-      if (o.sp !== sp || o.sex === c.sex || !(o.flags & F_GROWN)) continue;
-      const d2 = (o.x - c.x) ** 2 + (o.y - c.y) ** 2;
-      if (d2 < best) {
-        best = d2;
+      if (o.sp !== sp || o.sex === c.sex || !(o.flags & F_GROWN) || o === c) continue;
+      const d = arc(o.x, o.y, o.z, c.x, c.y, c.z);
+      if (d < best) {
+        best = d;
         c.callX = o.x;
         c.callY = o.y;
+        c.callZ = o.z;
+        c.hasCall = true;
       }
     }
-    if (best === 70 * 70) c.callX = -1;
   }
-  if (followV === 0 && fid < 0 && !mateC && c.callX >= 0 && adult && c.mateCd <= 0) {
-    set(tv, VEC.follow, c.callX - c.x, c.callY - c.y);
+  if (followV === 0 && fid < 0 && !mateC && c.hasCall && adult && c.mateCd <= 0) {
+    aim(c, VEC.follow, c.callX, c.callY, c.callZ);
     followV = 0.2;
   }
 
-  // --- beliefs about places (folk only)
+  // --- what it believes or remembers about places (clever kinds and folk)
   let dangerV = 0, goodV = 0;
-  if (sp === KITH && c.beliefs.length) {
+  if (tier >= CLEVER && c.beliefs.length) {
     const want = Math.max(1 - c.energy / def.maxEnergy, c.thirst);
     for (const h of c.beliefs) {
       const idea = w.ideas[h.idea];
       if (idea.place < 0) continue;
       const p = t.places[idea.place];
-      const dx = p.x - c.x, dy = p.y - c.y;
-      const d = Math.hypot(dx, dy);
+      const d = arc(p.x, p.y, p.z, c.x, c.y, c.z);
       if (idea.kind === "danger") {
         const v = h.s * clamp01(1.6 - d / (p.r * 1.25));
         if (v > dangerV) {
           dangerV = v;
-          set(tv, VEC.dangerPlace, dx, dy);
+          aim(c, VEC.dangerPlace, p.x, p.y, p.z);
         }
       } else if (idea.kind === "good") {
-        const v = h.s * (0.35 + 0.65 * want) * (d < p.r * 0.5 ? 0 : 1);
+        const v = h.s * (0.35 + 0.65 * want) * (d < p.r * 0.5 || d > 70 ? 0 : 1);
         if (v > goodV) {
           goodV = v;
-          set(tv, VEC.goodPlace, dx, dy);
+          aim(c, VEC.goodPlace, p.x, p.y, p.z);
         }
       }
     }
   }
-  if (warmD < 400 && sp === KITH) set(tv, VEC.warm, warmX, warmY);
+  if (warmD < 20 && sp === KITH) aim(c, VEC.warm, warmX, warmY, warmZ);
+  // --- something new the visitor put here
+  let novelV = 0;
+  if (tier >= CLEVER) {
+    for (const nv of w.novel) {
+      const d = arc(nv.x, nv.y, nv.z, c.x, c.y, c.z);
+      if (d < range * 1.5 && d > 2 && 1 - d / (range * 1.5) > novelV) {
+        novelV = 1 - d / (range * 1.5);
+        aim(c, VEC.novel, nv.x, nv.y, nv.z);
+      }
+    }
+  }
 
   // --- how it feels
   const alt = Math.max(0, t.height[cell] - 2);
-  const felt = w.temp - alt * 1.1 + warmth * 10 + Math.min(kinN, 4) * 1.4 + (kindHere === FOREST ? 1.5 : 0);
+  const cloak = c.knows & (1 << C_CLOAK) ? 9 : 0;
+  const felt = wx.temp - alt * 0.4 + warmth * 10 + Math.min(kinN, 4) * 1.4 + (kindHere === FOREST || kindHere === JUNGLE ? 1.5 : 0) + cloak;
   const cold = clamp01((def.comfort - felt) / 14);
   const eFrac = c.energy / def.maxEnergy;
-  // Russets keep territories: one with too many of its own kind around will not breed.
-  const crowded = sp === PREDATOR && kinN >= 4;
-  const ready = adult && c.mateCd <= 0 && eFrac > def.mateAt && !crowded && w.creatures.length < MAX_CREATURES ? 1 : 0;
+  const ready = adult && c.mateCd <= 0 && eFrac > def.mateAt && kinN < def.crowd && w.creatures.length < MAX_CREATURES ? 1 : 0;
   inp[IN.hunger] = 1 - eFrac;
   inp[IN.thirst] = c.thirst;
   inp[IN.tired] = c.tired;
   inp[IN.fear] = fear;
   inp[IN.cold] = cold;
-  inp[IN.night] = w.night;
+  inp[IN.night] = night;
   inp[IN.foodNear] = foodV;
   inp[IN.waterNear] = waterV;
   inp[IN.kinNear] = kinN ? 1 - Math.sqrt(kinD) / range : 0;
@@ -823,13 +1045,14 @@ function sense(w: World, c: Creature, idx: number): void {
   inp[IN.warmNear] = warmth;
   inp[IN.carrying] = c.carrying;
   inp[IN.followNear] = followV;
-  inp[IN.wet] = w.rain;
+  inp[IN.wet] = wx.rain;
+  inp[IN.novel] = novelV;
 
-  think(c.brain, inp, c.out);
+  think(c.brain, inp, c.out, c.hid);
   const out = c.out;
 
   // ---------- things decided a few times a second ----------
-  const here = placeAt(t, c.x, c.y);
+  const here = placeAt(t, c.x, c.y, c.z);
   const dtT = DT * THINK_EVERY;
 
   // Growing up, growing old.
@@ -838,18 +1061,23 @@ function sense(w: World, c: Creature, idx: number): void {
     c.flags |= F_GROWN;
     if (c.follow === c.mother) c.follow = -1;
     log(w, c, "grown", here);
+    if (sp === KITH) {
+      // What its mother can make, she has shown it by now.
+      const m = w.byId.get(c.mother);
+      if (m) for (const h of m.beliefs) if (w.ideas[h.idea].kind === "craft" && w.rng.next() < 0.8 && hold(w, c, w.ideas[h.idea], 1, m.id)) log(w, c, "learned", here, m.id, h.idea);
+    }
   }
   if (age > def.lifespan * (0.82 + 0.3 * ((c.id * 0.6180339) % 1)) && w.rng.next() < dtT / (DAY * 0.6)) {
     die(w, c, "age");
     return;
   }
 
-  // Feeling the cold, the dry and the snow for the first time.
+  // Feeling the cold and the dry for the first time.
   if (cold > 0.55 && !(c.flags & F_COLD)) {
     c.flags |= F_COLD;
-    log(w, c, w.coldLeft > 0 ? "cold" : "snow", here);
+    log(w, c, "snow", here);
   }
-  if (w.droughtLeft > 0 && c.thirst > 0.6 && !(c.flags & F_DROUGHT)) {
+  if (wx.dry && c.thirst > 0.6 && !(c.flags & F_DROUGHT)) {
     c.flags |= F_DROUGHT;
     log(w, c, "drought", here);
   }
@@ -861,7 +1089,7 @@ function sense(w: World, c: Creature, idx: number): void {
   } else if (eFrac > 0.55 && c.flags & F_HUNGRY) {
     c.flags &= ~F_HUNGRY;
     log(w, c, "fed", here);
-    learn(w, c, "good", c.x, c.y, 0.7);
+    learn(w, c, "good", 0.7);
   }
   if (c.thirst > 0.9 && !(c.flags & F_PARCHED)) {
     c.flags |= F_PARCHED;
@@ -869,69 +1097,105 @@ function sense(w: World, c: Creature, idx: number): void {
   } else if (c.thirst < 0.3 && c.flags & F_PARCHED) {
     c.flags &= ~F_PARCHED;
     log(w, c, "drank", here);
-    learn(w, c, "good", c.x, c.y, 0.7);
+    learn(w, c, "good", 0.7);
   }
   if (fear > 0.75) c.flags |= F_FLED;
   else if (fear < 0.05 && c.flags & F_FLED) {
     c.flags &= ~F_FLED;
-    if (threat === null && sp !== PREDATOR && w.rng.next() < 0.5) {
+    if (threat === null && w.rng.next() < 0.5) {
       log(w, c, "escaped", here);
-      learn(w, c, "danger", c.x, c.y, 0.55);
+      learn(w, c, "danger", 0.55);
     }
   }
   if (here >= 0 && !(c.seen & (1 << here))) {
     c.seen |= 1 << here;
     log(w, c, "reached", here);
   }
-  if (kindHere === RIVER && !(c.flags & F_WADED) && sp !== BIRD && w.riverRuns) {
+  if (kindHere === RIVER && !(c.flags & F_WADED) && !def.air && !def.sea) {
     c.flags |= F_WADED;
     log(w, c, "waded", here);
     if (sp === KITH) news(w, "firstWade", c.id, -1, here, -1, "firstWade");
+  }
+  // Crossing the sea, and coming ashore somewhere new.
+  if (sp === KITH) {
+    if (kindHere === SEA && !(c.flags & F_SAILED)) {
+      c.flags |= F_SAILED;
+      log(w, c, "sailed", nearestPlace(t, c.x, c.y, c.z));
+      news(w, "firstSail", c.id, -1, -1, -1, "firstSail");
+    }
+    const landNow = t.land[cell];
+    if (landNow >= 0 && landNow !== c.land) {
+      if (c.land >= 0) {
+        log(w, c, "landed", nearestPlace(t, c.x, c.y, c.z));
+        news(w, "landfall", c.id, -1, nearestPlace(t, c.x, c.y, c.z), landNow, `landfall${landNow}-${c.land}`);
+      }
+      c.land = landNow;
+    }
+  } else if (t.land[cell] >= 0) c.land = t.land[cell];
+
+  // Where it has been: a point now and then, for drawing its path.
+  if ((w.tick + c.id * 7) % 240 < THINK_EVERY) {
+    const n = c.path.length;
+    if (n < 3 || arc(c.path[n - 3], c.path[n - 2], c.path[n - 1], c.x, c.y, c.z) > 2.5) {
+      c.path.push(c.x, c.y, c.z);
+      if (c.path.length > 3 * 220) c.path.splice(3, 3);
+    }
   }
 
   // Home drifts to where life is lived.
   if (c.state === 1 || c.state === 2 || c.state === 3) {
     c.homeX += (c.x - c.homeX) * 0.025;
     c.homeY += (c.y - c.homeY) * 0.025;
+    c.homeZ += (c.z - c.homeZ) * 0.025;
+    const hl = Math.hypot(c.homeX, c.homeY, c.homeZ);
+    c.homeX /= hl;
+    c.homeY /= hl;
+    c.homeZ /= hl;
   }
 
   // Breeding.
-  if (ready && out[OUT.mate] > 0 && mateC && mateD < (sp === BIRD ? 36 : 16)) {
+  if (ready && out[OUT.mate] > 0 && mateC && mateD < (def.air || def.sea ? 49 : 16)) {
     const o = mateC;
     const od = SPECIES[o.sp];
     if (o.mateCd <= 0 && o.out[OUT.mate] > 0 && o.energy / od.maxEnergy > od.mateAt) {
       const [m, f] = c.sex === 0 ? [c, o] : [o, c];
       birth(w, m, f);
-      if (sp === BIRD && w.rng.next() < 0.4) birth(w, m, f);
-      if (sp === GRAZER && w.rng.next() < 0.2) birth(w, m, f);
+      if (tier === 0 && w.rng.next() < (def.air || def.sea ? 0.4 : 0.2)) birth(w, m, f);
     }
   }
 
-  // A russet strikes.
-  if (sp === PREDATOR && prey && c.foodKind !== 4 && out[OUT.eat] > 0) {
-    const dx = prey.x - c.x, dy = prey.y - c.y;
-    if (dx * dx + dy * dy < 2) {
+  // A hunter strikes.
+  if (prey && c.foodKind !== 4 && out[OUT.eat] > 0) {
+    const victim = prey;
+    if (arc(victim.x, victim.y, victim.z, c.x, c.y, c.z) < (sp === KITH ? 2.6 : 1.5)) {
       let herd = 0;
-      const pb = w.buckets[((prey.y / B) | 0) * NB + ((prey.x / B) | 0)];
-      for (const j of pb) {
+      for (const j of w.buckets[bucketOf(victim.x, victim.y, victim.z)]) {
         const o = w.creatures[j];
-        if (o.sp === prey.sp && o !== prey && (o.x - prey.x) ** 2 + (o.y - prey.y) ** 2 < 16) herd++;
+        if (o.sp === victim.sp && o !== victim && arc(o.x, o.y, o.z, victim.x, victim.y, victim.z) < 4) herd++;
       }
-      const safe = prey.sp === KITH && prey.state === 3 && w.shelters.some((s) => s.done && (s.x - prey.x) ** 2 + (s.y - prey.y) ** 2 < 2.5);
-      const chance = safe ? 0 : (0.55 / (1 + 0.25 * herd)) * (prey.state === 3 ? 1.5 : 1) * (isAdult(w, prey) ? 1 : 1.4);
+      const safe = victim.sp === KITH && victim.state === 3 && w.shelters.some((s) => s.done && arc(s.x, s.y, s.z, victim.x, victim.y, victim.z) < 1.6);
+      const chance = safe ? 0 : (0.42 / (1 + 0.25 * herd)) * (victim.state === 3 ? 1.5 : 1) * (isAdult(w, victim) ? 1 : 1.4);
       c.tired = Math.min(1, c.tired + 0.06);
       if (w.rng.next() < chance) {
-        prey.health -= isAdult(w, prey) ? 0.55 : 1;
-        if (prey.health <= 0) {
-          const victim = prey;
+        victim.health -= isAdult(w, victim) ? 0.55 : 1;
+        if (victim.health <= 0) {
           die(w, victim, "killed", c.id);
           c.kills++;
-          if (c.kills === 1) log(w, c, "kill", here, victim.id);
-          news(w, "firstKill", c.id, victim.id, here, victim.sp, "firstKill");
-          witness(w, victim, c);
+          if (c.kills === 1) log(w, c, sp === KITH ? "hunted" : "kill", here, victim.id);
+          news(w, sp === KITH ? "firstHunt" : "firstKill", c.id, victim.id, here, victim.sp, sp === KITH ? "firstHunt" : "firstKill");
+          ping(w, "hunt", victim.x, victim.y, victim.z, c.id);
+          // Everyone of the victim's kind close enough to see it remembers the kill.
+          for (const o of w.creatures) {
+            if (!o.alive || o.sp !== victim.sp || o === victim || SPECIES[o.sp].tier < CLEVER) continue;
+            if (arc(o.x, o.y, o.z, victim.x, victim.y, victim.z) > 10) continue;
+            if (o.sp === KITH) log(w, o, "sawKill", here, victim.id, c.id);
+            const was = [o.x, o.y, o.z];
+            learn(w, o, "danger", 0.9);
+            void was;
+          }
         } else {
-          log(w, prey, "hurt", here, c.id);
-          learn(w, prey, "danger", prey.x, prey.y, 0.8);
+          if (victim.sp === KITH) log(w, victim, "hurt", here, c.id);
+          learn(w, victim, "danger", 0.8);
         }
       }
     }
@@ -939,74 +1203,91 @@ function sense(w: World, c: Creature, idx: number): void {
 
   // Folk things.
   if (sp === KITH) {
-    kithActs(w, c, here);
+    // What it has had in its hands.
+    if (kindHere === MOUNTAIN) c.handled |= M.stone;
+    if (kindHere === BEACH) c.handled |= M.shell;
+    if (t.freshDist[cell] < 2) c.handled |= M.clay;
+    if (kindHere === PLAINS && w.grass[cell] > 0.5) c.handled |= M.fibre;
+    if (kindHere === JUNGLE) c.handled |= M.fibre;
+    if (c.carrying) c.handled |= M.wood;
+    if (warmth > 0.5 && w.fires.length) c.handled |= M.fire;
+    if (c.state === 1 && c.foodKind === 2) c.handled |= M.seed;
+    if (!(c.handled & M.stone)) for (const ri of st.rocks[bucketOf(c.x, c.y, c.z)]) if (arc(t.rocks[ri].x, t.rocks[ri].y, t.rocks[ri].z, c.x, c.y, c.z) < 2.2) c.handled |= M.stone;
+    if (!(c.handled & M.bone)) for (const l of w.carcasses) if (arc(l.x, l.y, l.z, c.x, c.y, c.z) < 2.2) c.handled |= M.bone;
+    if (c.state === 1 && c.foodKind === 4) c.handled |= M.hide;
+
+    kithActs(w, c, here, wx.rain);
     if (talk && adult && c.talkCd <= 0 && fear < 0.2 && c.pause <= 0 && c.state !== 3) {
       c.talkCd = talk.talkCd = DAY * w.rng.range(0.5, 0.9);
       c.pause = talk.pause = 5;
+      c.state = talk.state = 6;
       const m: Meeting = { id: w.tick * 1000 + (c.id % 1000), a: c.id, b: talk.id, t: w.t };
       log(w, c, "met", here, talk.id);
       log(w, talk, "met", here, c.id);
       news(w, "firstMeet", c.id, talk.id, here, -1, "firstMeet");
+      if (c.bornLand !== talk.bornLand && c.root !== talk.root) {
+        log(w, c, "stranger", here, talk.id);
+        log(w, talk, "stranger", here, c.id);
+        news(w, "groupsMet", c.id, talk.id, here, -1, `groups${Math.min(c.bornLand, talk.bornLand)}-${Math.max(c.bornLand, talk.bornLand)}`);
+      }
+      ping(w, "talk", c.x, c.y, c.z, c.id);
       if (w.talkMode === "auto") settleMeeting(w, m);
       else w.meetings.push(m);
     }
-    // Beliefs fade unless life renews them.
+    // Beliefs fade unless life renews them. What it can make, it keeps.
     if (c.beliefs.length && w.rng.next() < dtT / DAY) {
-      for (const h of c.beliefs) h.s -= 0.03;
+      for (const h of c.beliefs) if (w.ideas[h.idea].kind !== "craft") h.s -= 0.03;
       c.beliefs = c.beliefs.filter((h) => h.s > 0.12);
     }
-    // Sample where it is, so a belief's effect can be measured: before it was held, and since.
-    if ((w.tick / THINK_EVERY) % 5 < 1) {
-      c.samples++;
-      if (here >= 0) c.at[here]++;
-      for (const h of c.beliefs) {
-        const idea = w.ideas[h.idea];
-        if (idea.place < 0) continue;
-        idea.afterTot++;
-        if (here === idea.place) idea.afterIn++;
-      }
+  }
+  // Sample where it is, so a belief's effect can be measured: before it was held, and since.
+  if (tier >= CLEVER && (w.tick / THINK_EVERY) % 5 < 1) {
+    c.samples++;
+    if (here >= 0) c.at[here]++;
+    for (const h of c.beliefs) {
+      const idea = w.ideas[h.idea];
+      if (idea.place < 0) continue;
+      idea.afterTot++;
+      if (here === idea.place) idea.afterIn++;
     }
   }
 }
 
-function nearFire(w: World, x: number, y: number, r: number): boolean {
-  for (const f of w.fires) if ((f.x - x) ** 2 + (f.y - y) ** 2 < r * r) return true;
-  return false;
-}
-
-/** Everyone of the victim's kind close enough to see it remembers the kill. */
-function witness(w: World, victim: Creature, killer: Creature): void {
-  const p = placeAt(w.terrain, victim.x, victim.y);
-  for (const o of w.creatures) {
-    if (!o.alive || o.sp !== victim.sp || o === victim) continue;
-    if ((o.x - victim.x) ** 2 + (o.y - victim.y) ** 2 > 100) continue;
-    if (o.sp === KITH) {
-      log(w, o, "sawKill", p, victim.id, killer.id);
-      learn(w, o, "danger", victim.x, victim.y, 0.9);
-    }
-  }
-}
-
-function kithActs(w: World, c: Creature, here: number): void {
+function kithActs(w: World, c: Creature, here: number, rain: number): void {
   const out = c.out;
   const t = w.terrain;
+  const st = statics(w);
+  if (c.tinkerCd > 0) c.tinkerCd -= DT * THINK_EVERY;
+  // Trying things: turning over what it has handled until something comes of it.
+  if (out[OUT.tinker] > 0.25 && c.tinkerCd <= 0 && c.state !== 3 && c.inp[IN.fear] < 0.2 && c.flags & F_GROWN) {
+    c.tinkerCd = DAY * w.rng.range(1.2, 2.4);
+    const options = craftOptions(c);
+    if (options.length && w.rng.next() < 0.07) {
+      const a: Attempt = { id: w.tick * 1000 + (c.id % 1000), who: c.id, t: w.t, options };
+      c.pause = 4;
+      c.state = 9;
+      if (w.talkMode === "auto") settleAttempt(w, a);
+      else w.attempts.push(a);
+    }
+  }
   if (c.markCd > 0) return;
   if (!c.carrying && out[OUT.gather] > 0.2) {
     // Pick up wood if a tree is within reach.
-    const g = treeGrid[((c.y / B) | 0) * NB + ((c.x / B) | 0)];
-    for (let q = 0; q < g.length; q++) {
-      const tr = t.trees[g[q]];
-      if ((tr.x - c.x) ** 2 + (tr.y - c.y) ** 2 < 2.6) {
+    for (const ti of st.trees[bucketOf(c.x, c.y, c.z)]) {
+      const tr = t.trees[ti];
+      if (arc(tr.x, tr.y, tr.z, c.x, c.y, c.z) < 1.8) {
         c.carrying = 1;
         c.markCd = 3;
         return;
       }
     }
   }
+  const k = t.kind[cellOf(c.x, c.y, c.z)];
+  const dry = k !== RIVER && k !== LAKE && k !== SHALLOW && k !== SEA;
   if (c.carrying && out[OUT.fire] > 0.3 && out[OUT.fire] >= out[OUT.shelter]) {
     let fed = false;
     for (const f of w.fires) {
-      if ((f.x - c.x) ** 2 + (f.y - c.y) ** 2 < 9) {
+      if (arc(f.x, f.y, f.z, c.x, c.y, c.z) < 3) {
         if (f.fuel < DAY * 0.5) {
           f.fuel += DAY * 0.45;
           fed = true;
@@ -1015,9 +1296,10 @@ function kithActs(w: World, c: Creature, here: number): void {
         break;
       }
     }
-    if (!fed && c.carrying && w.rain < 0.5 && w.fires.length < 24 && t.kind[cellOf(c.x, c.y)] !== RIVER) {
-      w.fires.push({ x: c.x + c.hx * 0.6, y: c.y + c.hy * 0.6, fuel: DAY * 0.5, by: c.id });
+    if (!fed && c.carrying && rain < 0.5 && w.fires.length < 60 && dry) {
+      w.fires.push({ x: c.x + (c.hx * 0.6) / R, y: c.y + (c.hy * 0.6) / R, z: c.z + (c.hz * 0.6) / R, fuel: DAY * 0.5, by: c.id });
       c.carrying = 0;
+      c.handled |= M.fire;
       log(w, c, "fire", here);
       news(w, "firstFire", c.id, -1, here, -1, "firstFire");
     }
@@ -1025,14 +1307,11 @@ function kithActs(w: World, c: Creature, here: number): void {
     return;
   }
   if (c.carrying && out[OUT.shelter] > 0.3) {
-    let site = w.shelters.find((s) => (s.x - c.x) ** 2 + (s.y - c.y) ** 2 < 9);
-    const nearHome = (c.homeX - c.x) ** 2 + (c.homeY - c.y) ** 2 < 64;
-    if (!site && nearHome && w.shelters.length < 30 && !w.shelters.some((s) => (s.x - c.x) ** 2 + (s.y - c.y) ** 2 < 100)) {
-      const k = t.kind[cellOf(c.x, c.y)];
-      if (k !== RIVER && k !== HILLS) {
-        site = { x: c.x, y: c.y, wood: 0, done: false, life: DAY * 4, by: c.id };
-        w.shelters.push(site);
-      }
+    let site = w.shelters.find((s) => arc(s.x, s.y, s.z, c.x, c.y, c.z) < 3);
+    const nearHome = arc(c.homeX, c.homeY, c.homeZ, c.x, c.y, c.z) < 8;
+    if (!site && nearHome && w.shelters.length < 80 && dry && k !== MOUNTAIN && !w.shelters.some((s) => arc(s.x, s.y, s.z, c.x, c.y, c.z) < 7)) {
+      site = { x: c.x, y: c.y, z: c.z, wood: 0, done: false, life: DAY * 4, by: c.id, stone: (c.knows & (1 << C_STONEHUT)) !== 0 };
+      w.shelters.push(site);
     }
     if (site) {
       site.wood++;
@@ -1047,9 +1326,9 @@ function kithActs(w: World, c: Creature, here: number): void {
     }
     return;
   }
-  if (out[OUT.mark] > 0.55 && !w.markers.some((m) => (m.x - c.x) ** 2 + (m.y - c.y) ** 2 < 64)) {
-    w.markers.push({ x: c.x, y: c.y, by: c.id, t: w.t });
-    if (w.markers.length > 40) w.markers.shift();
+  if (out[OUT.mark] > 0.55 && dry && !w.markers.some((m) => arc(m.x, m.y, m.z, c.x, c.y, c.z) < 8)) {
+    w.markers.push({ x: c.x, y: c.y, z: c.z, by: c.id, t: w.t });
+    if (w.markers.length > 80) w.markers.shift();
     c.markCd = DAY;
     log(w, c, "marker", here);
     news(w, "firstMarker", c.id, -1, here, -1, "firstMarker");
@@ -1070,109 +1349,130 @@ function act(w: World, c: Creature): void {
   if (c.mateCd > 0) c.mateCd -= DT;
   if (c.talkCd > 0) c.talkCd -= DT;
   if (c.markCd > 0) c.markCd -= DT;
+  const cell = cellOf(c.x, c.y, c.z);
+  const k = t.kind[cell];
+  const grown = (c.flags & F_GROWN) !== 0;
 
   let pace = 0;
   let state = 0;
   const resting = out[OUT.rest] > 0.25 && fear < 0.35;
   if (c.pause > 0) {
     c.pause -= DT;
-    state = 6;
+    state = c.state >= 6 ? c.state : 6;
   } else if (resting) {
     state = 3;
     c.tired = Math.max(0, c.tired - DT * 0.03);
   } else {
-    let dx = 0, dy = 0;
-    for (let k = 0; k < N_VEC; k++) {
-      dx += out[k] * tv[k * 2];
-      dy += out[k] * tv[k * 2 + 1];
+    let dx = 0, dy = 0, dz = 0;
+    for (let v = 0; v < N_VEC; v++) {
+      const o = out[v];
+      dx += o * tv[v * 3];
+      dy += o * tv[v * 3 + 1];
+      dz += o * tv[v * 3 + 2];
     }
-    if (sp === KITH && !c.carrying && out[OUT.gather] > 0.2) {
-      // Wanting wood means walking to a tree.
-      const g = treeGrid[((c.y / B) | 0) * NB + ((c.x / B) | 0)];
-      if (g.length) {
-        const tr = t.trees[g[c.id % g.length]];
-        const d = Math.hypot(tr.x - c.x, tr.y - c.y) || 1;
-        dx += (out[OUT.gather] * (tr.x - c.x)) / d;
-        dy += (out[OUT.gather] * (tr.y - c.y)) / d;
-      }
+    // Play: the young of every kind, and the clever at any age, run rings round each other when nothing presses.
+    const playing = out[OUT.play] > 0.3 && (!grown || def.tier >= CLEVER) && fear < 0.1 && inp[IN.hunger] < 0.5;
+    if (playing) {
+      const a = w.t * 2.2 + c.id;
+      const sxp = c.y * c.wz - c.z * c.wy, syp = c.z * c.wx - c.x * c.wz, szp = c.x * c.wy - c.y * c.wx;
+      dx = dx * 0.3 + c.wx * Math.cos(a) + sxp * Math.sin(a);
+      dy = dy * 0.3 + c.wy * Math.cos(a) + syp * Math.sin(a);
+      dz = dz * 0.3 + c.wz * Math.cos(a) + szp * Math.sin(a);
     }
     if (c.detour > 0) {
       // Something was in the way: walk round it for a moment before trying again.
       c.detour -= DT;
-      dx = Math.cos(c.wander);
-      dy = Math.sin(c.wander);
+      dx = c.wx;
+      dy = c.wy;
+      dz = c.wz;
     }
-    const mag = Math.hypot(dx, dy);
+    const mag = Math.hypot(dx, dy, dz);
     if (mag > 0.06) {
       const want = Math.min(1, Math.max(0.12, 0.5 + 0.5 * out[OUT.speed])) * Math.min(1, mag * 1.6);
-      // Turn towards where it wants to go.
+      // Turn towards where it wants to go, staying along the ground.
       const turn = Math.min(1, DT * 5);
-      let hx = c.hx + (dx / mag - c.hx) * turn;
-      let hy = c.hy + (dy / mag - c.hy) * turn;
-      const hl = Math.hypot(hx, hy) || 1;
-      hx /= hl;
-      hy /= hl;
-      c.hx = hx;
-      c.hy = hy;
-      const cell = cellOf(c.x, c.y);
-      const k = t.kind[cell];
+      let hx = c.hx + (dx / mag - c.hx) * turn, hy = c.hy + (dy / mag - c.hy) * turn, hz = c.hz + (dz / mag - c.hz) * turn;
+      const hd = hx * c.x + hy * c.y + hz * c.z;
+      hx -= hd * c.x;
+      hy -= hd * c.y;
+      hz -= hd * c.z;
+      const hl = Math.hypot(hx, hy, hz) || 1;
+      c.hx = hx /= hl;
+      c.hy = hy /= hl;
+      c.hz = hz /= hl;
       let v = def.speed * c.traits.speed * want;
-      if (sp !== BIRD) v *= k === RIVER ? 0.5 : k === LAKE ? 0.45 : k === HILLS ? 0.8 : k === FOREST ? 0.9 : 1;
-      if (!(c.flags & F_GROWN)) v *= 0.85;
+      if (!def.air && !def.sea) v *= k === RIVER || k === SHALLOW ? 0.5 : k === LAKE || k === SEA ? 0.45 : k === MOUNTAIN ? 0.7 : k === FOREST || k === JUNGLE ? 0.9 : 1;
+      if (!grown) v *= 0.85;
       if (c.tired > 0.85) v *= 0.75;
       v *= 0.55 + 0.45 * c.health;
       if (c.state === 1) v *= 0.5; // it cannot eat and hurry at once
-      const nx = c.x + hx * v * DT, ny = c.y + hy * v * DT;
-      if (canStand(w, sp, nx, ny)) {
+      const s = (v * DT) / R;
+      let nx = c.x + hx * s, ny = c.y + hy * s, nz = c.z + hz * s;
+      const nl = Math.hypot(nx, ny, nz);
+      nx /= nl;
+      ny /= nl;
+      nz /= nl;
+      if (canStand(w, c, nx, ny, nz)) {
         c.x = nx;
         c.y = ny;
-      } else if (canStand(w, sp, nx, c.y)) c.x = nx;
-      else if (canStand(w, sp, c.x, ny)) c.y = ny;
-      else {
-        c.wander = Math.atan2(N / 2 - c.y, N / 2 - c.x) + w.rng.range(-1.2, 1.2);
-        c.detour = 2;
+        c.z = nz;
+      } else {
+        // Blocked: turn back the way it came, more or less, and walk that way a while.
+        const side = w.rng.range(-1.2, 1.2);
+        const ux = c.y * hz - c.z * hy, uy = c.z * hx - c.x * hz, uz = c.x * hy - c.y * hx;
+        c.wx = -hx * Math.cos(side) + ux * Math.sin(side);
+        c.wy = -hy * Math.cos(side) + uy * Math.sin(side);
+        c.wz = -hz * Math.cos(side) + uz * Math.sin(side);
+        c.detour = 2.5;
       }
       pace = want;
-      state = fear > 0.4 ? 4 : sp === PREDATOR && out[VEC.food] > 0.3 && c.foodKind !== 4 && inp[IN.foodNear] > 0 ? 5 : 0;
+      state = fear > 0.4 ? 4 : playing ? 7 : inp[IN.foodNear] > 0 && out[VEC.food] > 0.3 && c.foodKind === 0 && (def.prey.length > 0 || (sp === KITH && c.knows & (1 << C_SPEAR))) ? 5 : 0;
       c.tired = Math.min(1, Math.max(0, c.tired + DT * (0.002 + def.tire * want * want - 0.012 * (1 - want))));
     }
   }
   c.pace = pace;
 
   // Eating: only when it chooses to, and only what is within reach.
-  if (out[OUT.eat] > 0 && (c.foodKind || sp === GRAZER || sp === KITH) && state !== 4 && c.energy < def.maxEnergy - 1) {
+  const basket = sp === KITH && c.knows & (1 << C_BASKET) ? 1.5 : 1;
+  const maxE = def.maxEnergy * basket;
+  if (out[OUT.eat] > 0 && (c.foodKind || def.grass > 0) && state !== 4 && state < 6 && c.energy < maxE - 1) {
     let took = 0;
-    const want = Math.min(def.bite * size * DT, (def.maxEnergy - c.energy) / def.digest);
     let eff = def.digest;
+    const want = Math.min(def.bite * size * DT, (maxE - c.energy) / eff);
     if (c.foodKind === 2) {
       const b = t.bushes[c.foodAt];
-      if ((b.x - c.x) ** 2 + (b.y - c.y) ** 2 < 1.7) {
+      if (arc(b.x, b.y, b.z, c.x, c.y, c.z) < 1.5) {
         took = Math.min(want, w.bush[c.foodAt] * BERRY_E);
         w.bush[c.foodAt] -= took / BERRY_E;
+        // Those who know sowing leave the ground richer where they eat.
+        if (c.knows & (1 << C_SOW) && w.bush[c.foodAt] < BUSH_MAX - 0.02) {
+          const add = Math.min(BUSH_MAX - w.bush[c.foodAt], took / BERRY_E * 0.35);
+          w.bush[c.foodAt] += add;
+          led.grown += add * BERRY_E;
+        }
       }
     } else if (c.foodKind === 3 || c.foodKind === 4) {
       const l = (c.foodKind === 3 ? w.piles : w.carcasses)[c.foodAt];
-      if (l && (l.x - c.x) ** 2 + (l.y - c.y) ** 2 < 1.7) {
+      if (l && arc(l.x, l.y, l.z, c.x, c.y, c.z) < 1.5) {
         took = Math.min(want, l.energy);
         l.energy -= took;
       }
     } else if (c.foodKind === 5) {
-      const i = cellOf(c.x, c.y);
-      if (w.fish[i] > 0.05) {
+      // Sea life: under it if it flies or swims, or within a net's throw of the water's edge.
+      const i = sp === KITH ? c.foodAt : cell;
+      if (w.fish[i] > 0.05 && (sp !== KITH || arc(grid().cx[i], grid().cy[i], grid().cz[i], c.x, c.y, c.z) < 3.2)) {
         took = Math.min(want, (w.fish[i] - 0.04) * FISH_E);
         w.fish[i] -= took / FISH_E;
       }
     }
-    if (took <= 0 && (sp === GRAZER || sp === KITH)) {
+    if (took <= 0 && def.grass > 0 && w.grass[cell] > 0.05) {
       // Nothing better within reach: the grass under foot.
-      const i = cellOf(c.x, c.y);
-      if (w.grass[i] > 0.05) {
-        took = Math.min(want, (w.grass[i] - 0.03) * GRASS_E);
-        w.grass[i] -= took / GRASS_E;
-        if (sp === KITH) eff = 0.55;
-      }
+      took = Math.min(want, (w.grass[cell] - 0.03) * GRASS_E);
+      w.grass[cell] -= took / GRASS_E;
+      eff = def.grass + (sp === KITH && c.knows & (1 << C_DIGGER) ? 0.25 : 0);
     }
     if (took > 0) {
+      if (sp === KITH && c.knows & (1 << C_COOK) && inp[IN.warmNear] > 0.2) eff = Math.min(0.97, eff + 0.1);
       c.energy += took * eff;
       led.lost += took * (1 - eff);
       if (state !== 3) state = 1;
@@ -1180,16 +1480,17 @@ function act(w: World, c: Creature): void {
   }
 
   // Drinking: at fresh water, or a little from the rain.
-  const cell = cellOf(c.x, c.y);
-  const fd = w.riverRuns ? t.freshDist[cell] : t.lakeDist[cell];
-  if (out[OUT.drink] > 0 && fd < 1.6 && c.thirst > 0.02) {
+  if (out[OUT.drink] > 0 && t.freshDist[cell] < 1.9 && c.thirst > 0.02 && k !== ICE) {
     c.thirst = Math.max(0, c.thirst - DT * 0.22);
     c.waterX = c.x;
     c.waterY = c.y;
+    c.waterZ = c.z;
+    c.hasWater = true;
     if (state === 0) state = 2;
   }
-  c.thirst = Math.min(1, c.thirst + DT / (def.thirstDays * DAY) * (1 + 0.5 * pace) - w.rain * DT * 0.004);
-  if (c.thirst < 0) c.thirst = 0;
+  const pot = sp === KITH && c.knows & (1 << C_POT) ? 0.5 : 1;
+  const hot = Math.max(0, t.temp[cell] - def.hot + 8) / 20;
+  c.thirst = Math.max(0, Math.min(1, c.thirst + (DT / (def.thirstDays * DAY)) * (1 + 0.5 * pace + hot) * pot - inp[IN.wet] * DT * 0.004));
 
   // The cost of living.
   const cold = inp[IN.cold];
@@ -1201,13 +1502,13 @@ function act(w: World, c: Creature): void {
   // Body.
   if (c.energy <= 0.001) c.health -= DT * 0.02;
   else if (c.thirst >= 1) c.health -= DT * 0.008;
-  else if (cold > 0.7) c.health -= DT * 0.006 * (cold - 0.7) / 0.3;
+  else if (cold > 0.7) c.health -= (DT * 0.006 * (cold - 0.7)) / 0.3;
   else if (c.health < 1) c.health = Math.min(1, c.health + DT * 0.006);
   c.state = state;
 
-  if (sp === BIRD) {
+  if (def.air) {
     const target = state === 3 ? 0 : state === 1 || state === 2 ? 0.25 : 3.2;
-    c.z += (target - c.z) * Math.min(1, DT * 1.6);
+    c.alt += (target - c.alt) * Math.min(1, DT * 1.6);
   }
   if (c.health <= 0) die(w, c, c.energy <= 0.001 ? "hunger" : c.thirst >= 1 ? "thirst" : "cold");
 }
@@ -1215,7 +1516,6 @@ function act(w: World, c: Creature): void {
 /* ---------------- the step ---------------- */
 
 export function step(w: World): void {
-  ensureGrids(w);
   w.t += DT;
   w.tick++;
   environment(w);
@@ -1227,7 +1527,7 @@ export function step(w: World): void {
   for (const b of w.buckets) b.length = 0;
   for (let i = 0; i < cs.length; i++) {
     const c = cs[i];
-    w.buckets[((c.y / B) | 0) * NB + ((c.x / B) | 0)].push(i);
+    w.buckets[bucketOf(c.x, c.y, c.z)].push(i);
   }
   const n = cs.length; // newborns wait for the next step
   for (let i = 0; i < n; i++) {
@@ -1247,45 +1547,62 @@ export function step(w: World): void {
     }
   }
   cs.length = k;
-  if (w.gone.size > 700) {
+  if (w.gone.size > 900) {
     for (const [id, c] of w.gone) {
-      if (c.sp !== KITH || w.gone.size > 1400) w.gone.delete(id);
-      if (w.gone.size <= 500) break;
+      if (c.sp !== KITH || w.gone.size > 1800) w.gone.delete(id);
+      if (w.gone.size <= 700) break;
     }
   }
-  // Meetings nobody wrote words for settle themselves after a while.
+  // Meetings and makings nobody wrote words for settle themselves after a while.
   while (w.meetings.length && w.t - w.meetings[0].t > DAY * 0.3) settleMeeting(w, w.meetings.shift() as Meeting);
+  while (w.attempts.length && w.t - w.attempts[0].t > DAY * 0.3) settleAttempt(w, w.attempts.shift() as Attempt);
 
-  // The chronicle's slower beats.
-  if (w.tick % 200 === 0) {
-    const day = dayOf(w.t);
-    if (day > 0 && day % SEASON_DAYS === 0) news(w, "season", -1, -1, -1, w.season, "season" + day);
-    if (w.season === 3) news(w, "firstWinter", -1, -1, -1, -1, "firstWinter");
-    const pop = cs.length;
-    for (const m of [100, 200, 300, 400]) if (pop >= m) news(w, "crowd", -1, -1, -1, m, "crowd" + m);
+  // Once a day: how each kind is doing.
+  const day = dayOf(w.t);
+  if (dayOf(w.t - DT) !== day) {
+    for (let sp = 0; sp < N_SPECIES; sp++) {
+      const s = w.dayStats[sp];
+      if (!w.counts[sp] && !s.deaths && !w.records[sp].length) continue;
+      let gen = 0;
+      for (const c of cs) if (c.sp === sp && c.gen > gen) gen = c.gen;
+      w.records[sp].push({ day, alive: w.counts[sp], lifespan: s.deaths ? s.ageSum / s.deaths : -1, gen, births: s.births });
+      if (w.records[sp].length > 400) w.records[sp].shift();
+      s.births = s.deaths = s.ageSum = 0;
+    }
+    if (day % SEASON_DAYS === 0) news(w, "season", -1, -1, -1, w.season);
+    for (const m of [100, 200, 400, 600]) if (cs.length >= m) news(w, "crowd", -1, -1, -1, m, "crowd" + m);
   }
 }
 
 /* ---------------- the visitor's hand ---------------- */
 
-export function makeRain(w: World): void {
-  w.droughtLeft = 0;
-  w.rainLeft = DAY * 0.4;
-  news(w, "rainSent");
+function blob(w: World, x: number, y: number, z: number, kind: "rain" | "drought" | "cold", r: number, days: number): void {
+  w.blobs.push({ x, y, z, r, left: DAY * days, kind });
+  if (w.blobs.length > 12) w.blobs.shift();
 }
-export function makeDrought(w: World): void {
-  w.droughtLeft = DAY * 2.5;
-  w.rainLeft = 0;
-  news(w, "drought");
+export function makeRain(w: World, x: number, y: number, z: number): void {
+  w.blobs = w.blobs.filter((b) => !(b.kind === "drought" && arc(b.x, b.y, b.z, x, y, z) < b.r));
+  blob(w, x, y, z, "rain", 30, 0.4);
+  news(w, "rainSent", -1, -1, nearestPlace(w.terrain, x, y, z), -1, "", { x, y, z });
+  fromTheSky(w, x, y, z, "skyRain");
 }
-export function makeCold(w: World): void {
-  w.coldLeft = DAY * 1.5;
-  news(w, "cold");
+export function makeDrought(w: World, x: number, y: number, z: number): void {
+  blob(w, x, y, z, "drought", 38, 2.5);
+  news(w, "drought", -1, -1, nearestPlace(w.terrain, x, y, z), -1, "", { x, y, z });
+  fromTheSky(w, x, y, z, "skyDry");
 }
-export function dropFood(w: World, x: number, y: number): boolean {
-  if (!canStand(w, GRAZER, x, y)) return false;
-  w.piles.push({ x, y, energy: 160 });
-  w.ledger.given += 160;
+export function makeCold(w: World, x: number, y: number, z: number): void {
+  blob(w, x, y, z, "cold", 36, 1.5);
+  news(w, "cold", -1, -1, nearestPlace(w.terrain, x, y, z), -1, "", { x, y, z });
+  fromTheSky(w, x, y, z, "skyCold");
+}
+export function dropFood(w: World, x: number, y: number, z: number): boolean {
+  const k = w.terrain.kind[cellOf(x, y, z)];
+  if (k === SEA || k === SHALLOW || k === LAKE) return false;
+  w.piles.push({ x, y, z, energy: 220 });
+  w.ledger.given += 220;
+  w.novel.push({ x, y, z, t: w.t });
+  fromTheSky(w, x, y, z, "skyFood");
   return true;
 }
 
@@ -1298,7 +1615,7 @@ export function who(w: World, id: number): Creature | undefined {
 export function fingerprint(w: World): string {
   let h = 2166136261;
   const mix = (v: number): void => {
-    h ^= Math.round(v * 1000) | 0;
+    h ^= Math.round(v * 100000) | 0;
     h = Math.imul(h, 16777619);
   };
   for (const c of w.creatures) {
@@ -1307,8 +1624,9 @@ export function fingerprint(w: World): string {
     mix(c.y);
     mix(c.energy);
   }
-  for (let i = 0; i < N * N; i += 7) mix(w.grass[i]);
-  mix(w.wet);
+  for (let i = 0; i < CELLS; i += 7) mix(w.grass[i]);
   mix(w.news.length);
   return `${w.creatures.length}:${(h >>> 0).toString(16)}`;
 }
+
+export { THINKER };

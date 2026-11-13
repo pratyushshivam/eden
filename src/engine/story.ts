@@ -3,9 +3,10 @@
  * wrote back into the world. Nothing here invents events: every sentence is
  * built from a creature's log, its beliefs, or the world's news.
  */
-import { DAY, KITH, SEASONS, SEASON_DAYS, SPECIES } from "./config";
-import type { Creature, Held, Idea, LogEntry, Meeting, News, Talk, Thought, World } from "./types";
-import { ageDays, hold, makeIdea, settleMeeting, who } from "./world";
+import { CLEVER, DAY, IN, KITH, OUT, SEASONS, SEASON_DAYS, SPECIES, VEC } from "./config";
+import { CRAFTS, materialWords } from "./craft";
+import type { Attempt, Creature, Held, Idea, LogEntry, Meeting, News, Talk, Thought, World } from "./types";
+import { ageDays, craftOptions, discover, hold, makeIdea, settleAttempt, settleMeeting, sunAt, weatherAt, who } from "./world";
 
 /* ---------------- names ---------------- */
 
@@ -116,12 +117,16 @@ const CAUSE: Record<string, string> = {
 export const causeWords = (c: Creature): string => CAUSE[c.cause] ?? "";
 
 export function tellIdea(w: World, idea: Idea, plain = false): string {
-  if (idea.text && !plain) return idea.text;
+  if (idea.text && !plain && idea.kind !== "craft") return idea.text;
   switch (idea.kind) {
     case "danger": return `${cap(placeName(w, idea.place))} is dangerous.`;
     case "good": return `${cap(placeName(w, idea.place))} is a good place, with food and water.`;
     case "follow": return `Stay close to ${nameOf(w, idea.who)}.`;
     case "avoid": return `Keep away from ${nameOf(w, idea.who)}.`;
+    case "craft": {
+      const c = CRAFTS[idea.craft];
+      return idea.text && idea.text !== c.plain ? `How to make ${idea.text} (${c.plain}).` : `How to make ${c.plain}.`;
+    }
     default: return idea.text;
   }
 }
@@ -132,7 +137,7 @@ export function tellLog(w: World, e: LogEntry): string {
   const o = e.o >= 0 ? nameOf(w, e.o) : "";
   const near = at ? ` at ${at}` : "";
   switch (e.k) {
-    case "placed": return `Arrived on the island near ${at}, part grown, with no parents.`;
+    case "placed": return `Came down out of the sky near ${at}, part grown, with no parents and no memory of before.`;
     case "born": return `Born near ${at} to ${o} and ${nameOf(w, e.n)}.`;
     case "grown": return "Came of age.";
     case "hungry": return `Nearly starved${near}.`;
@@ -161,7 +166,26 @@ export function tellLog(w: World, e: LogEntry): string {
     case "met": return `Spoke with ${o}${near}.`;
     case "named": return "Took a name.";
     case "believed": return `Came to believe: "${tellIdea(w, w.ideas[e.n])}"`;
+    case "made": return `Made something no one had shown it${near}: ${craftName(w, e.n)}. ${CRAFTS[w.ideas[e.n].craft].does}`;
+    case "learned": return `Was shown by ${o} how to make ${craftName(w, e.n)}.`;
+    case "sailed": return `Went out onto the sea for the first time, near ${at}.`;
+    case "landed": return `Came ashore on a land it had never stood on: ${at}.`;
+    case "hunted": return `Killed a ${who(w, e.o) ? SPECIES[(who(w, e.o) as Creature).sp].one : "creature"} with a spear${near}: its first hunt.`;
+    case "skyKin": return `Saw one of its own kind come down out of the sky${near}, full grown, with no parents.`;
+    case "skyBeast": return `Saw a ${SPECIES[e.n]?.one ?? "creature"} come down out of the sky${near}.`;
+    case "skyFood": return `Saw food fall out of the empty sky${near}.`;
+    case "skyRain": return `Saw rain come all at once out of a clear sky${near}.`;
+    case "skyCold": return `Felt a sudden cold fall${near}, from nowhere.`;
+    case "skyDry": return `Felt the rains stop${near}, as if something had turned them away.`;
+    case "stranger": return `Met ${o}, one of its own kind from another land, who speaks of things by other names.`;
   }
+}
+
+/** What a group calls a thing it makes. */
+export function craftName(w: World, ideaId: number): string {
+  const idea = w.ideas[ideaId];
+  const c = CRAFTS[idea.craft];
+  return idea.text && idea.text !== c.plain ? `${idea.text} (${c.plain})` : c.plain;
 }
 
 function deathOf(w: World, id: number): string {
@@ -170,7 +194,6 @@ function deathOf(w: World, id: number): string {
   return how ? ` (${how})` : "";
 }
 
-const SP_FIRST = ["dapple", "russet", "skim", "kith"];
 /** One line of the world's chronicle. */
 export function tellNews(w: World, n: News): string {
   const a = n.a >= 0 ? nameOf(w, n.a) : "";
@@ -178,8 +201,15 @@ export function tellNews(w: World, n: News): string {
   const at = n.p >= 0 ? placeName(w, n.p) : "";
   const near = at ? ` near ${at}` : "";
   switch (n.kind) {
-    case "arrive": return `The first ${SPECIES[n.n].many} were set down on the island.`;
-    case "firstBirth": return `The first ${SP_FIRST[n.n]} was born on the island${near}.`;
+    case "arrive": return `The first of the ${SPECIES[n.n].many} came down onto the planet.`;
+    case "firstBirth": return `The first ${SPECIES[n.n].one} was born here${near}.`;
+    case "invented": return `${cap(a)} made something new${near}: ${craftName(w, n.n)}. ${CRAFTS[w.ideas[n.n].craft].does}`;
+    case "reinvented": return `${cap(a)} worked out for itself how to make ${craftName(w, n.n)}.`;
+    case "craftSpread": return `The making of ${craftName(w, n.n)} is spreading among the kith. It began with ${a}.`;
+    case "firstSail": return `${cap(a)} was the first to go out onto the sea.`;
+    case "landfall": return `${cap(a)} crossed the water and came ashore${near}: the first of its people on ${w.terrain.lands[n.n]?.desc ?? "that land"}.`;
+    case "groupsMet": return `Two peoples met for the first time${near}: ${a} and ${b}.`;
+    case "firstHunt": return `${cap(a)} hunted with a spear for the first time${near}.`;
     case "firstDeath": {
       const c = who(w, n.a);
       return `The first death: ${c ? `a ${SPECIES[c.sp].one}` : "a creature"}${c?.name ? ` called ${c.name}` : ""}, ${c ? causeWords(c) : ""}${near}.`;
@@ -188,7 +218,7 @@ export function tellNews(w: World, n: News): string {
       const c = who(w, n.a);
       return `${cap(a)} died ${c ? causeWords(c) : ""}${near}${c ? `, ${Math.round(ageDays(w, c))} days old` : ""}.`;
     }
-    case "firstKill": return `A russet made the first kill: a ${SPECIES[n.n].one}${near}.`;
+    case "firstKill": return `A hunter made the first kill: a ${SPECIES[n.n].one}${near}.`;
     case "lastOne": return `The last of the ${SPECIES[n.n].many} died${near}. There are none left.`;
     case "generation": {
       const c = who(w, n.a);
@@ -203,14 +233,13 @@ export function tellNews(w: World, n: News): string {
     case "spread": return `A belief took hold among the kith: "${tellIdea(w, w.ideas[n.n])}" It began with ${a}.`;
     case "firstName": return `The first name: one of the kith became ${a}.`;
     case "placeNamed": return `${cap(a)} gave ${w.terrain.places[n.p].desc} a name: ${w.placeNames[n.p] ?? ""}.`;
-    case "season": return `${cap(SEASONS[n.n])} came.`;
-    case "firstWinter": return "The first winter. The grass thinned and the berries failed.";
+    case "season": return `${cap(SEASONS[n.n])} came to the north, ${SEASONS[(n.n + 2) % 4]} to the south.`;
     case "crowd": return `There were ${n.n} creatures alive at once.`;
-    case "rainSent": return "Rain came out of a clear sky.";
-    case "drought": return "A drought began. The river started to fail.";
-    case "droughtEnd": return "The drought ended.";
-    case "cold": return "A sudden cold fell over the island.";
-    case "coldEnd": return "The cold lifted.";
+    case "rainSent": return `Rain came out of a clear sky${near}.`;
+    case "drought": return `A drought began${near}.`;
+    case "droughtEnd": return "A drought ended.";
+    case "cold": return `A sudden cold fell${near}.`;
+    case "coldEnd": return "A hard cold lifted.";
     case "lore": return `${cap(a)} said something the others repeated: "${tellIdea(w, w.ideas[n.n])}"`;
     default: return n.kind;
   }
@@ -236,7 +265,7 @@ export function plainVoice(w: World, c: Creature): Thought {
   if (near) bits.push(near.k === "hungry" ? "I have been empty and it nearly ended me." : near.k === "parched" ? "I have been dry to the bone." : "The red hunter came for me and I am still here.");
   const strongest = [...c.beliefs].sort((x, y) => y.s - x.s)[0];
   if (strongest) bits.push(tellIdea(w, w.ideas[strongest.idea], true));
-  if (bits.length < 2) bits.push(w.night > 0.5 ? "The bright one has gone under again." : "The bright one is up and the ground is warm.");
+  if (bits.length < 2) bits.push(sunAt(w, c.x, c.y, c.z) < 0 ? "The bright one has gone under again." : "The bright one is up and the ground is warm.");
   return { t: w.t, text: bits.slice(0, 3).join(" "), by: "plain" };
 }
 
@@ -265,6 +294,10 @@ export interface KithFacts {
   kin: string[];
   life: string[];
   beliefs: string[];
+  /** What it knows how to make, and what it has had in its hands. */
+  makes: string[];
+  handled: string[];
+  land: string;
   places: { id: number; what: string; name: string | null }[];
 }
 
@@ -280,16 +313,21 @@ export function kithFacts(w: World, c: Creature, lifeLines = 14): KithFacts {
     traits: traitWords(c),
     kin: kinLine(w, c),
     life: log.map((e) => `${when(e.t)}: ${tellLog(w, e)}`),
-    beliefs: c.beliefs.map((h) => tellIdea(w, w.ideas[h.idea])),
+    beliefs: c.beliefs.filter((h) => w.ideas[h.idea].kind !== "craft").map((h) => tellIdea(w, w.ideas[h.idea])),
+    makes: c.beliefs.filter((h) => w.ideas[h.idea].kind === "craft").map((h) => `${craftName(w, h.idea)}: ${CRAFTS[w.ideas[h.idea].craft].does}`),
+    handled: materialWords(c.handled),
+    land: c.land >= 0 ? w.terrain.lands[c.land].desc : "the open sea",
     places: w.terrain.places.filter((p) => c.seen & (1 << p.id)).map((p) => ({ id: p.id, what: p.desc, name: w.placeNames[p.id] })),
   };
 }
 
-export function nowFacts(w: World): { season: string; time: string; weather: string } {
+export function nowFacts(w: World, c: Creature): { season: string; time: string; weather: string } {
+  const sun = sunAt(w, c.x, c.y, c.z);
+  const wx = weatherAt(w, c.x, c.y, c.z);
   return {
-    season: SEASONS[w.season],
-    time: w.night > 0.6 ? "night" : w.sun < 0.25 ? "the sun is low" : "day",
-    weather: w.coldLeft > 0 ? "a sudden bitter cold" : w.droughtLeft > 0 ? "drought, the river is failing" : w.rain > 0.3 ? (w.temp < 1.5 ? "snow" : "rain") : w.temp < 4 ? "cold" : "fair",
+    season: SEASONS[(w.season + (c.y < 0 ? 2 : 0)) % 4],
+    time: sun < -0.05 ? "night" : sun < 0.25 ? "the bright one is low" : "day",
+    weather: wx.dry ? "the rains have stopped and the ground is cracking" : wx.rain > 0.3 ? (wx.temp < 1.5 ? "snow" : "rain") : wx.temp < 3 ? "bitter cold" : wx.temp > 30 ? "great heat" : "fair",
   };
 }
 
@@ -467,3 +505,74 @@ export function ideaPath(idea: Idea): { from: number; to: number; t: number }[] 
   return idea.edges.map((e) => ({ from: e.a, to: e.b, t: e.t }));
 }
 
+
+/* ---------------- making things ---------------- */
+
+/** What a kith that is trying things has to hand, and what could come of it. */
+export function attemptFacts(w: World, a: Attempt): { one: KithFacts; in_hands: string[]; could_make: { ref: string; what: string; use: string }[] } | null {
+  const c = w.byId.get(a.who);
+  if (!c) return null;
+  const options = craftOptions(c).filter((o) => a.options.includes(o));
+  if (!options.length) return null;
+  return {
+    one: kithFacts(w, c, 10),
+    in_hands: materialWords(c.handled),
+    could_make: options.map((o) => ({ ref: `m${o}`, what: CRAFTS[o].what, use: CRAFTS[o].does })),
+  };
+}
+
+export interface AttemptResult {
+  make?: unknown;
+  name?: unknown;
+  how?: unknown;
+}
+
+/** Takes what the model decided this kith makes, and makes it real. Falls back to chance if the answer is no use. */
+export function applyAttempt(w: World, a: Attempt, r: AttemptResult | null): Idea | null {
+  const c = w.byId.get(a.who);
+  if (!c) return null;
+  const ref = typeof r?.make === "string" ? Number(r.make.replace(/^m/, "")) : NaN;
+  if (!r || !Number.isInteger(ref) || !a.options.includes(ref)) return settleAttempt(w, a);
+  const name = cleanName(r.name).toLowerCase();
+  const idea = discover(w, c, ref, name && !nameTaken(w, name) ? name : "");
+  if (idea && typeof r.how === "string" && r.how.trim().length > 8) {
+    c.thoughts.push({ t: w.t, text: r.how.trim().slice(0, 400), by: "model" });
+    if (c.thoughts.length > 6) c.thoughts.shift();
+  }
+  return idea;
+}
+
+/* ---------------- wordless minds ---------------- */
+
+const FEELS: [number, string][] = [
+  [IN.fear, "afraid"], [IN.hunger, "hungry"], [IN.thirst, "thirsty"], [IN.cold, "cold"], [IN.tired, "tired"], [IN.hurt, "hurting"],
+  [IN.novel, "curious"], [IN.goodBelief, "remembering food"], [IN.dangerBelief, "wary of this place"], [IN.followNear, "missing someone"],
+];
+const WANTS: [number, string][] = [
+  [VEC.food, "food"], [VEC.water, "water"], [VEC.kin, "the others"], [VEC.home, "home"], [VEC.follow, "the one it follows"], [VEC.novel, "the new thing"],
+  [VEC.goodPlace, "the place that fed it"], [OUT.rest, "sleep"], [OUT.play, "play"], [OUT.mate, "a mate"],
+];
+/**
+ * A clever animal has no words. This puts its strongest feelings and wants,
+ * read straight from its own network, into two or three plain ones. Nothing
+ * is written by a language model.
+ */
+export function impression(c: Creature): string {
+  if (SPECIES[c.sp].tier < CLEVER) return "";
+  const feel = FEELS.map(([i, n]) => [c.inp[i], n] as [number, string]).filter((x) => x[0] > 0.35).sort((x, y) => y[0] - x[0]).slice(0, 2).map((x) => x[1]);
+  const want = WANTS.map(([i, n]) => [c.out[i], n] as [number, string]).filter((x) => x[0] > 0.3).sort((x, y) => y[0] - x[0])[0];
+  const bits = [...feel];
+  if (want) bits.push(`wants ${want[1]}`);
+  return bits.length ? bits.join(" · ") : "at ease";
+}
+
+/** The line of mothers back to the one the visitor set down. Nearest first. */
+export function lineage(w: World, c: Creature): Creature[] {
+  const out: Creature[] = [];
+  let cur: Creature | undefined = c;
+  for (let i = 0; i < 40 && cur && cur.mother >= 0; i++) {
+    cur = who(w, cur.mother);
+    if (cur) out.push(cur);
+  }
+  return out;
+}

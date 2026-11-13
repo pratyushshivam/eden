@@ -18,7 +18,9 @@ export interface LogEntry {
 export type LogKind =
   | "placed" | "born" | "grown" | "hungry" | "fed" | "parched" | "drank" | "waded" | "reached"
   | "mated" | "child" | "lostMate" | "lostChild" | "lostParent" | "sawKill" | "escaped" | "hurt"
-  | "kill" | "fire" | "shelter" | "marker" | "cold" | "drought" | "snow" | "heard" | "told" | "met" | "named" | "believed";
+  | "kill" | "fire" | "shelter" | "marker" | "cold" | "drought" | "snow" | "heard" | "told" | "met" | "named" | "believed"
+  | "made" | "learned" | "sailed" | "landed" | "hunted"
+  | "skyKin" | "skyBeast" | "skyFood" | "skyRain" | "skyCold" | "skyDry" | "stranger";
 
 /** A belief a creature holds. The idea itself lives in the world, shared. */
 export interface Held {
@@ -32,16 +34,19 @@ export interface Held {
 
 export interface Idea {
   id: number;
-  kind: "danger" | "good" | "follow" | "avoid" | "lore";
+  kind: "danger" | "good" | "follow" | "avoid" | "lore" | "craft";
   /** Place id for danger/good, else -1. */
   place: number;
   /** Creature id for follow/avoid, else -1. */
   who: number;
-  /** In the creature's words, once it has any. */
+  /** Which thing it is the knowledge of making, for a craft; else -1. */
+  craft: number;
+  /** In the creature's words, once it has any. For a craft, the name they gave the thing. */
   text: string;
-  /** Whose life it first came out of, and when. */
+  /** Whose life it first came out of, when, and on which landmass. */
   origin: number;
   t: number;
+  land: number;
   /** If it is a changed retelling of another idea, which. */
   from: number;
   /** Every passing-on: who told whom, when. */
@@ -75,13 +80,16 @@ export interface Creature {
   sp: Species;
   /** 0 female, 1 male. */
   sex: 0 | 1;
+  /** Where it is: a unit vector from the middle of the planet. */
   x: number;
   y: number;
-  /** Height above the ground (birds). */
   z: number;
-  /** Facing, a unit vector. */
+  /** Height above the ground (fliers). */
+  alt: number;
+  /** Facing: a unit vector along the ground. */
   hx: number;
   hy: number;
+  hz: number;
   /** Speed last step, as a share of top speed. */
   pace: number;
   energy: number;
@@ -90,40 +98,55 @@ export interface Creature {
   health: number;
   /** World time of birth. */
   born: number;
+  /** Where it was born or set down. */
+  bx: number;
+  by: number;
+  bz: number;
   traits: Traits;
   brain: Float32Array;
   inp: Float32Array;
+  hid: Float32Array;
   out: Float32Array;
-  /** Unit vectors to the things it can head for, two numbers each. */
+  /** Unit vectors along the ground to the things it can head for, three numbers each. */
   tv: Float32Array;
   mother: number;
   father: number;
   mate: number;
   children: number[];
-  /** Generations since a placed ancestor. */
+  /** Generations since a placed ancestor, and that ancestor's id. */
   gen: number;
+  root: number;
   homeX: number;
   homeY: number;
-  /** Where it last drank, or -1. */
+  homeZ: number;
+  /** Where it last drank; `hasWater` says whether it has ever. */
   waterX: number;
   waterY: number;
-  /** Where it last heard one of its kind calling, or -1. */
+  waterZ: number;
+  hasWater: boolean;
+  /** Where it last heard one of its kind calling. */
   callX: number;
   callY: number;
-  wander: number;
-  /** 0 roam, 1 eat, 2 drink, 3 rest, 4 flee, 5 hunt, 6 talk. */
+  callZ: number;
+  hasCall: boolean;
+  /** The way it is wandering: a unit vector along the ground. */
+  wx: number;
+  wy: number;
+  wz: number;
+  /** 0 roam, 1 eat, 2 drink, 3 rest, 4 flee, 5 hunt, 6 talk, 7 play, 8 grieve, 9 make. */
   state: number;
-  /** What it is about to eat: 0 nothing, 1 grass, 2 bush, 3 pile, 4 carcass, 5 fish. */
+  /** What it is about to eat: 0 nothing, 1 grass, 2 bush, 3 pile, 4 carcass, 5 sea life. */
   foodKind: number;
   foodAt: number;
   mateCd: number;
   talkCd: number;
   markCd: number;
+  tinkerCd: number;
   pause: number;
   /** Seconds left of walking round an obstacle. */
   detour: number;
   carrying: number;
-  /** Individuals it keeps close to or away from (kith). */
+  /** Individuals it keeps close to or away from. */
   follow: number;
   avoid: number;
   /** Bit flags for things that are logged once. */
@@ -133,6 +156,14 @@ export interface Creature {
   /** How many times it was found at each place, out of `samples`. */
   at: Uint16Array;
   samples: number;
+  /** Bits: which materials it has handled, and which things it knows how to make. */
+  handled: number;
+  knows: number;
+  /** The landmass it last stood on, and the one it was born or set down on (-1 for none). */
+  land: number;
+  bornLand: number;
+  /** Where it has been: points along its path, three numbers each, oldest first. */
+  path: number[];
   name: string | null;
   log: LogEntry[];
   beliefs: Held[];
@@ -143,10 +174,28 @@ export interface Creature {
   kills: number;
 }
 
-export interface Fire { x: number; y: number; fuel: number; by: number }
-export interface Shelter { x: number; y: number; wood: number; done: boolean; life: number; by: number }
-export interface Marker { x: number; y: number; by: number; t: number }
-export interface Lump { x: number; y: number; energy: number }
+export interface Fire { x: number; y: number; z: number; fuel: number; by: number }
+export interface Shelter { x: number; y: number; z: number; wood: number; done: boolean; life: number; by: number; stone: boolean }
+export interface Marker { x: number; y: number; z: number; by: number; t: number }
+export interface Lump { x: number; y: number; z: number; energy: number }
+/** A patch of weather the visitor made. */
+export interface Blob { x: number; y: number; z: number; r: number; left: number; kind: "rain" | "drought" | "cold" }
+/** Something new in the world that the curious may come to look at. */
+export interface Novelty { x: number; y: number; z: number; t: number }
+
+/** Something worth looking at, for the pings on the globe and the "happening now" strip. */
+export interface Ping {
+  id: number;
+  t: number;
+  kind: string;
+  x: number;
+  y: number;
+  z: number;
+  /** A creature to follow, or -1. */
+  who: number;
+  /** The news item that tells it in words, or -1. */
+  news: number;
+}
 
 export interface News {
   id: number;
@@ -166,6 +215,14 @@ export interface Meeting {
   t: number;
 }
 
+/** A kith trying to make something: what it could make with what it has handled. */
+export interface Attempt {
+  id: number;
+  who: number;
+  t: number;
+  options: number[];
+}
+
 /** A conversation between two kith. */
 export interface Talk {
   t: number;
@@ -180,12 +237,24 @@ export interface Talk {
 export interface Ledger {
   /** Energy present at the start plus everything the visitor has put in. */
   given: number;
-  /** Grown by plants and fish. */
+  /** Grown by plants and sea life. */
   grown: number;
   /** Spent on living. */
   burned: number;
   /** Lost in digestion, rot and die-back. */
   lost: number;
+}
+
+/** How a kind has been doing, one entry per day: for the chart of learning to survive. */
+export interface Record {
+  day: number;
+  /** Alive at the end of the day. */
+  alive: number;
+  /** Mean age at death (days) of those that died that day, or -1 if none did. */
+  lifespan: number;
+  /** Highest generation alive. */
+  gen: number;
+  births: number;
 }
 
 export interface World {
@@ -196,9 +265,9 @@ export interface World {
   tick: number;
   /** Grass per cell, 0..fert. */
   grass: Float64Array;
-  /** Berries on each bush. */
+  /** Fruit on each bush. */
   bush: Float64Array;
-  /** Fish per cell, 0..1; -1 where there is none. */
+  /** Sea life per cell, 0..1; -1 where there is none. */
   fish: Float64Array;
   creatures: Creature[];
   byId: Map<number, Creature>;
@@ -210,35 +279,37 @@ export interface World {
   markers: Marker[];
   carcasses: Lump[];
   piles: Lump[];
-  /** Weather. */
-  rain: number;
-  wet: number;
-  rainLeft: number;
-  droughtLeft: number;
-  coldLeft: number;
-  nextWeather: number;
-  /** Derived each step. */
-  temp: number;
-  sun: number;
-  night: number;
+  blobs: Blob[];
+  novel: Novelty[];
+  /** Rain falling and ground wetness by region (6 faces of REGION x REGION). */
+  rainGrid: Float32Array;
+  wetGrid: Float32Array;
+  /** Where the sun is: a unit vector from the planet's middle. */
+  sunX: number;
+  sunY: number;
+  sunZ: number;
+  /** Season in the north (the south is half a year away). */
   season: number;
-  growth: number;
-  riverRuns: boolean;
   ideas: Idea[];
   placeNames: (string | null)[];
   placeNamedBy: number[];
   news: News[];
+  pings: Ping[];
   /** Kinds of news already told, for "the first time" entries. */
   told: Set<string>;
   meetings: Meeting[];
+  attempts: Attempt[];
   talks: Talk[];
-  /** "auto": the engine settles meetings itself. "external": it queues them for whoever writes the words. */
+  /** "auto": the engine settles meetings and makings itself. "external": it queues them for whoever writes the words. */
   talkMode: "auto" | "external";
   ledger: Ledger;
   counts: number[];
   placed: number[];
   births: number;
   deaths: number;
+  /** Per kind, per day. */
+  records: Record[][];
+  dayStats: { births: number; deaths: number; ageSum: number }[];
   /** Spatial buckets, rebuilt every step. */
   buckets: number[][];
 }
