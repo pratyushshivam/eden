@@ -157,6 +157,12 @@ export interface Creature {
   /** How many times it was found at each place, out of `samples`. */
   at: Uint16Array;
   samples: number;
+  /** Its nature: each 0..1. Inherited from its parents, and moved by what happens to it. */
+  nature: { temper: number; trust: number; pride: number; warmth: number };
+  /** Its habit of speech: an index into a small set of manners. */
+  speech: number;
+  /** How it regards the shining stranger, -1 (hates) .. 1 (reveres). Moved by what the stranger says and does. */
+  regard: number;
   /** True for the one body the visitor is walking around in. */
   avatar: boolean;
   /** How it has decided to treat the shining stranger: 0 undecided, 1 curious, 2 wary, 3 hostile, 4 devoted. */
@@ -295,7 +301,7 @@ export interface World {
   avatarId: number;
   avatarName: string | null;
   /** Where the visitor wants that body to go: a direction along the ground (zero for standing still). `down` is set if it is struck down. */
-  ctl: { x: number; y: number; z: number; run: boolean; down: boolean };
+  ctl: { x: number; y: number; z: number; run: boolean; down: boolean; talkTo: number };
   /** What the visitor and the kith have said to each other, newest last. */
   chat: { who: number; me: boolean; text: string; t: number }[];
   /** Kith who have just seen the stranger for the first time and have yet to decide what to make of it. */

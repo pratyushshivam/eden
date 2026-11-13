@@ -4,7 +4,7 @@
  */
 import {
   CLEVER, CRAFTS, DAY, HIDDEN, IN, KITH, N_IN, N_OUT, OUT, R, SPECIES, THINKER, TIER_NAMES, VEC, ageDays, arc, brainDistance, causeWords, craftName,
-  genomeSize, holders, impression, lifeStage, lineage, materialWords, nameOf, placeAt, placeName, STANCE_WORDS, suspectWords, tellIdea, tellLog, tellNews, traitWords, when, who,
+  genomeSize, holders, impression, lifeStage, lineage, materialWords, nameOf, placeAt, placeName, STANCE_WORDS, mannerOf, moodOf, natureWords, regardWords, suspectWords, tellIdea, tellLog, tellNews, traitWords, when, who,
   type Creature, type Idea, type World,
 } from "../engine";
 import { cloakColor } from "../render/critters";
@@ -186,7 +186,7 @@ export class Panels {
       `card${c.id}`,
       `<p class="kicker" id="c-kicker"></p><h2 class="name" id="c-name"></h2><p class="doing" id="c-doing"></p>
        ${kith ? '<div class="section"><h3>In its own words</h3><div id="c-voice"></div></div>' : ""}
-       ${kith ? '<div class="section"><h3>Curiosity and suspicion</h3><div class="meters" id="c-meters"></div><p class="mind-note" id="c-mindnote"></p></div>' : ""}
+       ${kith ? '<div class="section"><h3>Its nature</h3><p class="mind-note" id="c-nature"></p></div><div class="section"><h3>Curiosity and suspicion</h3><div class="meters" id="c-meters"></div><p class="mind-note" id="c-mindnote"></p></div>' : ""}
        ${clever ? '<div class="section"><h3>What it feels, with no words</h3><p class="impress" id="c-impress"></p><p class="voice-note">Read straight from its own network as it runs. No language model is involved.</p></div>' : ""}
        <div class="section"><h3>Needs</h3><div class="needs" id="c-needs"></div></div>
        <div class="section"><h3>Its brain, now</h3><canvas class="brain" id="c-brain"></canvas><p class="brain-note" id="c-brainnote"></p><div class="diff" id="c-diff"></div></div>
@@ -217,6 +217,7 @@ export class Panels {
       } else html = `<p class="voice waiting">${waiting ? "Gathering its thoughts…" : c.alive ? "It has not put anything into words yet." : "It never put anything into words."}</p>`;
       this.part("c-voice", html);
       const meter = (label: string, v: number, hot: boolean): string => `<span>${label}</span><div class="bar${hot ? " low" : ""}"><i style="width:${Math.round(Math.max(0, Math.min(1, v)) * 100)}%"></i></div><small>${Math.round(v * 100)}</small>`;
+      this.part("c-nature", c.avatar ? "Yours to decide." : `${esc(cap(natureWords(c).join("; ")))}. It ${esc(mannerOf(c))}. Just now: ${esc(moodOf(w, c))}.${c.metAvatar ? ` Toward you: ${esc(regardWords(c.regard))}.` : ""} Its nature came from its parents and shifts with what happens to it.`);
       this.part("c-meters", meter("Curiosity", c.wonder, false) + meter("Suspicion", c.suspect, c.suspect > 0.5));
       const you = c.avatar ? "This is you." : c.metAvatar ? ` It has seen you walking among them, and ${STANCE_WORDS[c.stance] ?? STANCE_WORDS[0]}.` : "";
       this.part("c-mindnote", c.avatar ? you : `Suspicion is how far it has come to think its world is made and watched. Now: ${esc(suspectWords(c.suspect))}. It rises only from what happens to it (things arriving out of the sky, meeting you, what you tell it) and from what more suspicious kith tell it.${esc(you)}`);

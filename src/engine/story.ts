@@ -305,6 +305,10 @@ export interface KithFacts {
   kin: string[];
   life: string[];
   beliefs: string[];
+  /** Who it is: its nature, its habit of speech, and its mood just now. These decide how it talks and what it will do. */
+  nature: string[];
+  way_of_speaking: string;
+  mood: string;
   /** How readily it looks into things, and how far it has come to suspect its world is made: words, then 0..1. */
   curiosity: string;
   suspicion: string;
@@ -329,6 +333,9 @@ export function kithFacts(w: World, c: Creature, lifeLines = 14): KithFacts {
     kin: kinLine(w, c),
     life: log.map((e) => `${when(e.t)}: ${tellLog(w, e)}`),
     beliefs: c.beliefs.filter((h) => w.ideas[h.idea].kind !== "craft").map((h) => tellIdea(w, w.ideas[h.idea])),
+    nature: natureWords(c),
+    way_of_speaking: mannerOf(c),
+    mood: moodOf(w, c),
     curiosity: c.wonder > 0.7 ? "restless, must look into everything" : c.wonder > 0.45 ? "curious" : "incurious, keeps to what it knows",
     suspicion: suspectWords(c.suspect),
     suspicion_level: Math.round(c.suspect * 100) / 100,
@@ -337,6 +344,42 @@ export function kithFacts(w: World, c: Creature, lifeLines = 14): KithFacts {
     land: c.land >= 0 ? w.terrain.lands[c.land].desc : "the open sea",
     places: w.terrain.places.filter((p) => c.seen & (1 << p.id)).map((p) => ({ id: p.id, what: p.desc, name: w.placeNames[p.id] })),
   };
+}
+
+const MANNERS = [
+  "speaks in short blunt statements", "answers a question with a question", "talks round a thing before saying it", "jokes when uneasy",
+  "speaks slowly and gravely, as if each word cost something", "boasts, and turns talk to itself", "hedges and mutters, never quite committing",
+  "is tender, and calls others by what they are to it", "is sharp-tongued and mocks what it does not believe", "says little, and what it says is an order or a refusal",
+];
+
+/** A kith's nature, in plain words: who it is, apart from what has happened to it. */
+export function natureWords(c: Creature): string[] {
+  const n = c.nature;
+  const out: string[] = [];
+  out.push(n.temper > 0.7 ? "quick to anger" : n.temper < 0.3 ? "slow to anger, hard to rouse" : "even-tempered");
+  out.push(n.trust > 0.7 ? "trusting, takes others at their word" : n.trust < 0.3 ? "distrustful, wants proof" : "wary but fair");
+  out.push(n.pride > 0.7 ? "proud, will not be told what to do" : n.pride < 0.3 ? "meek, gives way to others" : "holds its ground without pushing");
+  out.push(n.warmth > 0.7 ? "warm, cares for those near it" : n.warmth < 0.3 ? "cold, keeps to itself" : "neither warm nor cold");
+  if (c.traits.bold > 0.68) out.push("bold");
+  else if (c.traits.bold < 0.32) out.push("easily frightened");
+  return out;
+}
+export const mannerOf = (c: Creature): string => MANNERS[c.speech % MANNERS.length];
+
+/** How it is feeling just now, from the last day of its life. */
+export function moodOf(w: World, c: Creature): string {
+  const recent = c.log.filter((e) => w.t - e.t < DAY * 1.2).map((e) => e.k);
+  if (recent.some((k) => k === "lostMate" || k === "lostChild" || k === "lostParent")) return "grieving";
+  if (recent.some((k) => k === "hurt" || k === "escaped" || k === "sawKill")) return "shaken and on edge";
+  if (c.energy < 30) return "weak with hunger";
+  if (c.thirst > 0.7) return "parched";
+  if (recent.includes("made")) return "pleased with itself";
+  if (recent.includes("child")) return "glad";
+  return c.nature.temper > 0.7 ? "restless" : "settled";
+}
+
+export function regardWords(r: number): string {
+  return r > 0.6 ? "reveres it" : r > 0.25 ? "likes it" : r > -0.25 ? "has no settled feeling about it" : r > -0.6 ? "dislikes it" : "hates it";
 }
 
 /** What a level of suspicion means, in words the model can write from. */
@@ -609,7 +652,7 @@ export function lineage(w: World, c: Creature): Creature[] {
 
 /* ---------------- the shining stranger ---------------- */
 
-const DOES = ["watch", "approach", "flee", "attack", "follow", "fetch_others", "stay"];
+const DOES = ["watch", "approach", "flee", "attack", "follow", "fetch_others", "stay", "refuse", "turn_away"];
 /** What the model says a kith does about the stranger, as a stance. -1 leaves it as it was. */
 function stanceOf(does: unknown): number {
   switch (does) {
@@ -619,12 +662,13 @@ function stanceOf(does: unknown): number {
     case "attack": return 3;
     case "follow": return 4;
     case "fetch_others": return 1;
+    case "turn_away": return 2;
     default: return -1;
   }
 }
 
 /** What a kith is looking at when it looks at the visitor's body. */
-export function strangerFacts(w: World, c: Creature): { steps_away: number; what: string; called: string | null; this_one: string; said_so_far: string[] } | null {
+export function strangerFacts(w: World, c: Creature): { steps_away: number; what: string; called: string | null; this_one: string; feeling_towards_it: string; said_so_far: string[] } | null {
   const av = w.byId.get(w.avatarId);
   if (!av) return null;
   return {
@@ -632,7 +676,8 @@ export function strangerFacts(w: World, c: Creature): { steps_away: number; what
     what: "a stranger: shaped like one of its own kind, but shining with its own light, born of no mother, belonging to no people. It walks, it watches, and sometimes it speaks.",
     called: w.avatarName,
     this_one: STANCE_WORDS[c.stance] ?? STANCE_WORDS[0],
-    said_so_far: c.log.filter((e) => e.k === "spokeGlow").length ? w.chat.filter((m) => m.who === c.id).slice(-6).map((m) => `${m.me ? "stranger" : "it"}: ${m.text}`) : [],
+    feeling_towards_it: regardWords(c.regard),
+    said_so_far: w.chat.filter((m) => m.who === c.id).slice(-8).map((m) => `${m.me ? "stranger" : "it"}: ${m.text}`),
   };
 }
 
@@ -667,6 +712,7 @@ export function applyReact(w: World, c: Creature, r: ReactResult | null): string
 
 export interface AnswerResult {
   says?: unknown;
+  regard?: unknown;
   does?: unknown;
   believes?: unknown;
   suspect?: unknown;
@@ -687,6 +733,15 @@ export function applyAnswer(w: World, c: Creature, said: string, r: AnswerResult
     reply = r.says.trim().slice(0, 300);
     const st = stanceOf(r.does);
     if (st >= 0) c.stance = st;
+    else if (r.does === "refuse" && c.stance === 4) c.stance = 1;
+    // How the exchange changed what it feels about the stranger; and being treated well or badly leaves a mark on its nature.
+    const g = Number(r.regard);
+    if (Number.isFinite(g)) {
+      const d = Math.max(-0.4, Math.min(0.4, g));
+      c.regard = Math.max(-1, Math.min(1, c.regard + d));
+      c.nature.trust = Math.max(0, Math.min(1, c.nature.trust + d * 0.15));
+      c.nature.temper = Math.max(0, Math.min(1, c.nature.temper - d * 0.1));
+    }
     // How much the exchange moved it towards thinking the world is made: the model's reading, kept within bounds.
     const d = Number(r.suspect);
     if (Number.isFinite(d)) c.suspect = Math.max(0, Math.min(1, c.suspect + Math.max(-0.1, Math.min(0.3, d))));
@@ -705,7 +760,32 @@ export function applyAnswer(w: World, c: Creature, said: string, r: AnswerResult
     }
   } else {
     // No model: it answers plainly, by how it has taken the stranger.
-    reply = ["I do not know what you are.", "You shine. Why do you shine?", "Keep away from me.", "Go. You do not belong here.", "I will walk where you walk."][c.stance] ?? "I do not know what you are.";
+    const n = c.nature;
+    // No model: it answers plainly, out of its own nature and how it has taken the stranger.
+    reply =
+      c.stance === 3 ? (n.pride > 0.6 ? "This is our ground. Go." : "Go away. Go!")
+      : c.stance === 2 ? (n.trust < 0.35 ? "I do not believe a word from a thing that shines." : "Keep back. I am listening from here.")
+      : c.stance === 4 ? (n.pride < 0.35 ? "Tell me what to do and I will do it." : "I will walk where you walk, for now.")
+      : n.pride > 0.7 ? "You do not tell me things. You ask me."
+      : n.warmth > 0.7 ? "You are far from your own. Are you hungry?"
+      : n.trust < 0.3 ? "Show me. Words are easy."
+      : n.temper > 0.7 ? "Say it quickly. I have no patience for shining things."
+      : "You shine. Why do you shine?";
+    // Asked to come along, it decides for itself: the proud and the distrustful mostly will not.
+    if (/\b(follow|come with|come along|walk with)\b/i.test(said)) {
+      const will = c.regard * 0.6 + n.trust * 0.5 + (1 - n.pride) * 0.5 + (c.traits.bold < 0.3 ? 0.15 : 0) - 0.55;
+      if (c.stance !== 3 && will > 0.12) {
+        c.stance = 4;
+        reply = n.pride < 0.35 ? "Yes. I will come. Do not go fast." : "I will come a little way, and see.";
+      } else {
+        if (c.stance === 4) c.stance = 1;
+        reply = n.pride > 0.6 ? "I follow no one. You may follow me." : n.trust < 0.4 ? "Follow you where? No. Not until I know what you are." : n.temper > 0.65 ? "No. Stop asking." : "No. My place is here.";
+        c.regard = Math.max(-1, c.regard - (n.pride > 0.6 ? 0.08 : 0.02));
+      }
+    } else if (/\b(go away|leave me|stop following|stay here|stay)\b/i.test(said) && c.stance === 4) {
+      c.stance = 1;
+      reply = n.pride < 0.35 ? "As you say. I will stay." : "Then go on without me.";
+    }
     if (c.stance === 0) c.stance = c.traits.bold > 0.5 ? 1 : 2;
   }
   w.chat.push({ who: c.id, me: false, text: reply, t: w.t });

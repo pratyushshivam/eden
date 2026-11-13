@@ -89,7 +89,7 @@ export function createWorld(seed: number): World {
     grass, bush, fish,
     creatures: [], byId: new Map(), gone: new Map(), nextId: 1,
     fires: [], shelters: [], markers: [], carcasses: [], piles: [], blobs: [], novel: [],
-    avatarId: -1, avatarName: null, ctl: { x: 0, y: 0, z: 0, run: false, down: false }, sightings: [], chat: [],
+    avatarId: -1, avatarName: null, ctl: { x: 0, y: 0, z: 0, run: false, down: false, talkTo: -1 }, sightings: [], chat: [],
     cuts: new Uint8Array(terrain.trees.length), felled: new Float64Array(terrain.trees.length),
     rainGrid: new Float32Array(N_REGION), wetGrid: new Float32Array(N_REGION),
     sunX: 1, sunY: 0, sunZ: 0, season: 0,
@@ -158,7 +158,25 @@ export function canStand(w: World, c: { sp: Species; knows: number }, x: number,
   return true;
 }
 
+/** What a kind of event does to the nature of the one it happens to. */
+const MARKS: { [k: string]: [number, number, number, number] } = {
+  // temper, trust, pride, warmth
+  hurt: [0.04, -0.07, -0.02, 0], escaped: [0.02, -0.04, 0, 0], sawKill: [0.03, -0.06, 0, -0.02], hungry: [0.03, 0, -0.03, -0.02],
+  fed: [-0.02, 0.02, 0, 0.02], drank: [-0.01, 0.02, 0, 0.01], lostMate: [0.02, -0.02, -0.03, -0.06], lostChild: [0.04, -0.03, -0.04, -0.05],
+  lostParent: [0.01, -0.02, -0.02, -0.03], made: [0, 0, 0.07, 0.01], shelter: [-0.01, 0, 0.03, 0.01], hunted: [0.02, 0, 0.05, -0.01],
+  child: [-0.02, 0.01, 0.02, 0.05], mated: [-0.01, 0.02, 0, 0.04], heard: [0, 0.01, -0.01, 0.01], skyFood: [0, 0.03, 0, 0.01],
+  skyCold: [0.02, -0.03, 0, 0], skyDry: [0.02, -0.03, 0, 0], struckGlow: [0.05, -0.02, 0.03, -0.02],
+};
+
 function log(w: World, c: Creature, k: LogKind, p = -1, o = -1, n = -1): void {
+  const mark = MARKS[k];
+  if (mark) {
+    const nt = c.nature;
+    nt.temper = clamp01(nt.temper + mark[0]);
+    nt.trust = clamp01(nt.trust + mark[1]);
+    nt.pride = clamp01(nt.pride + mark[2]);
+    nt.warmth = clamp01(nt.warmth + mark[3]);
+  }
   c.log.push({ t: w.t, k, p, o, n });
   if (c.log.length > 70) c.log.splice(8, 1); // keep the earliest memories, lose the middle
 }
@@ -228,6 +246,8 @@ function blank(w: World, sp: Species, x: number, y: number, z: number, traits: T
     flags: 0, seen: 0, at: new Uint16Array(32), samples: 0, handled: 0, knows: 0, land: w.terrain.land[cellOf(x, y, z)], bornLand: w.terrain.land[cellOf(x, y, z)],
     path: [x, y, z],
     avatar: false, stance: 0, metAvatar: false, suspect: 0, wonder: clamp01(0.4 + w.rng.gauss() * 0.18),
+    nature: { temper: clamp01(0.5 + w.rng.gauss() * 0.26), trust: clamp01(0.5 + w.rng.gauss() * 0.26), pride: clamp01(0.5 + w.rng.gauss() * 0.26), warmth: clamp01(0.5 + w.rng.gauss() * 0.26) },
+    speech: w.rng.int(10), regard: 0,
     name: null, log: [], beliefs: [], thoughts: [],
     alive: true, died: 0, cause: "", kills: 0,
   };
@@ -663,6 +683,9 @@ function birth(w: World, m: Creature, f: Creature): void {
   c.hasWater = m.hasWater;
   c.follow = m.id;
   c.wonder = clamp01((m.wonder + f.wonder) / 2 + w.rng.gauss() * 0.08);
+  // A child's nature leans to one parent or the other in each respect, and is its own besides.
+  for (const k of ["temper", "trust", "pride", "warmth"] as const) c.nature[k] = clamp01((w.rng.next() < 0.5 ? m : f).nature[k] * 0.7 + 0.15 + w.rng.gauss() * 0.14);
+  if (w.rng.next() < 0.6) c.speech = (w.rng.next() < 0.5 ? m : f).speech;
   c.alt = m.alt;
   admit(w, c);
   w.births++;
@@ -962,7 +985,8 @@ function sense(w: World, c: Creature, idx: number): void {
         if (w.talkMode === "auto") {
           // No words to decide with: its own boldness and chance settle how it takes the stranger.
           const roll = w.rng.next();
-          c.stance = c.traits.bold > 0.66 ? (roll < 0.12 ? 3 : 1) : c.traits.bold < 0.3 ? 2 : roll < 0.6 ? 1 : roll < 0.85 ? 2 : roll < 0.95 ? 4 : 3;
+          const nt = c.nature;
+          c.stance = nt.temper > 0.68 && nt.pride > 0.55 ? 3 : nt.trust < 0.32 ? 2 : nt.pride < 0.3 && nt.trust > 0.55 ? 4 : c.traits.bold > 0.5 || c.wonder > 0.6 ? 1 : roll < 0.5 ? 1 : 2;
         } else w.sightings.push({ who: c.id, t: w.t });
       }
       // Wary of it: it unsettles like a threat, though less than a hunter does.
@@ -1422,6 +1446,25 @@ function act(w: World, c: Creature): void {
     moveAvatar(w, c);
     return;
   }
+  if (w.ctl.talkTo === c.id) {
+    // The visitor is speaking to it: it stops and turns to face them.
+    const av = w.byId.get(w.avatarId);
+    if (av) {
+      const d = av.x * c.x + av.y * c.y + av.z * c.z;
+      let fx = av.x - c.x * d, fy = av.y - c.y * d, fz = av.z - c.z * d;
+      const fl = Math.hypot(fx, fy, fz);
+      if (fl > 1e-5) {
+        fx /= fl; fy /= fl; fz /= fl;
+        const k = Math.min(1, DT * 60);
+        c.hx += (fx - c.hx) * k; c.hy += (fy - c.hy) * k; c.hz += (fz - c.hz) * k;
+        const hl = Math.hypot(c.hx, c.hy, c.hz) || 1;
+        c.hx /= hl; c.hy /= hl; c.hz /= hl;
+      }
+      c.pace = 0;
+      c.state = 6;
+      return;
+    }
+  }
   const def = SPECIES[c.sp];
   const out = c.out;
   const tv = c.tv;
@@ -1456,9 +1499,9 @@ function act(w: World, c: Creature): void {
       dz += o * tv[v * 3 + 2];
     }
     // Play: the young of every kind, and the clever at any age, run rings round each other when nothing presses.
-    const playing = out[OUT.play] > 0.3 && (!grown || def.tier >= CLEVER) && fear < 0.1 && inp[IN.hunger] < 0.5;
+    const playing = out[OUT.play] > 0.3 && !grown && fear < 0.1 && inp[IN.hunger] < 0.5 && ((w.t / 14 + c.id * 0.37) % 1) < 0.45;
     if (playing) {
-      const a = w.t * 2.2 + c.id;
+      const a = w.t * 0.8 + c.id;
       const sxp = c.y * c.wz - c.z * c.wy, syp = c.z * c.wx - c.x * c.wz, szp = c.x * c.wy - c.y * c.wx;
       dx = dx * 0.3 + c.wx * Math.cos(a) + sxp * Math.sin(a);
       dy = dy * 0.3 + c.wy * Math.cos(a) + syp * Math.sin(a);
@@ -1471,11 +1514,18 @@ function act(w: World, c: Creature): void {
       dy = c.wy;
       dz = c.wz;
     }
+    // Nothing pressing: for stretches of its time it goes for a walk rather than standing about.
+    if (Math.hypot(dx, dy, dz) < 0.3 && !c.avatar && !def.sea && ((w.t / 11 + c.id * 0.61) % 1) < 0.6) {
+      dx += c.wx * 0.42;
+      dy += c.wy * 0.42;
+      dz += c.wz * 0.42;
+    }
     const mag = Math.hypot(dx, dy, dz);
-    if (mag > 0.06) {
+    // With nothing much pulling on it, it stands where it is rather than turning on the spot.
+    if (mag > (c.pace > 0 ? 0.14 : 0.3)) {
       const want = Math.min(1, Math.max(0.12, 0.5 + 0.5 * out[OUT.speed])) * Math.min(1, mag * 1.6);
       // Turn towards where it wants to go, staying along the ground.
-      const turn = Math.min(1, DT * 5);
+      const turn = Math.min(1, DT * 3.2);
       let hx = c.hx + (dx / mag - c.hx) * turn, hy = c.hy + (dy / mag - c.hy) * turn, hz = c.hz + (dz / mag - c.hz) * turn;
       const hd = hx * c.x + hy * c.y + hz * c.z;
       hx -= hd * c.x;
@@ -1660,7 +1710,7 @@ export function takeAvatar(w: World, x: number, y: number, z: number): Creature 
   w.ledger.given += c.energy + SPECIES[KITH].mass * c.traits.size;
   admit(w, c);
   w.avatarId = c.id;
-  w.ctl = { x: 0, y: 0, z: 0, run: false, down: false };
+  w.ctl = { x: 0, y: 0, z: 0, run: false, down: false, talkTo: -1 };
   news(w, "avatar", c.id, -1, nearestPlace(w.terrain, c.x, c.y, c.z), -1, "avatar");
   return c;
 }
