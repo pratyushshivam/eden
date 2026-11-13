@@ -366,7 +366,7 @@ body:not([data-panel=""]) .dock { left: calc((100vw - var(--panel)) / 2); max-wi
   background: var(--paper);
   border: 1px solid var(--rule);
 }
-body.photo .top, body.photo .dock, body.photo .panel, body.photo .toast, body.photo .tag, body.photo .bubbles, body.photo .spend, body.photo .intro, body.photo .ghost { opacity: 0; pointer-events: none; }
+body.photo .happening, body.photo .pings, body.photo .top, body.photo .dock, body.photo .panel, body.photo .toast, body.photo .tag, body.photo .bubbles, body.photo .spend, body.photo .intro, body.photo .ghost { opacity: 0; pointer-events: none; }
 body.photo.saving .photo-bar { opacity: 0; }
 
 .spend {
@@ -632,3 +632,7 @@ body.photo .interact, body.photo .keys, body.photo .chat { display: none; }
   .keys { display: none; }
   .chat, .interact { bottom: calc(var(--safe-bottom) + 92px); }
 }
+
+.keyrow { display: flex; gap: 8px; margin-top: 12px; }
+.keyrow input { flex: 1; min-width: 0; height: 40px; padding: 0 12px; font: inherit; color: var(--ink); background: var(--sheet); border: 1px solid var(--rule); border-radius: 0; outline: none; }
+.keyrow input:focus { border-color: var(--ink); }

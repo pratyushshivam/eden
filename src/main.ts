@@ -206,6 +206,7 @@ async function boot(): Promise<void> {
     deselect();
     stage.cam.flyTo(x, y, z, 40);
   };
+  panels.onKey = (key) => mind.connect(key);
   panels.onNewWorld = () => {
     void forgetWorld(world.seed).then(() => {
       location.href = `?seed=${1 + Math.floor(Math.random() * 99998)}${debug ? "&debug" : ""}`;

@@ -70,6 +70,7 @@ export class Panels {
   onAsk: (id: number) => void = () => {};
   onNewWorld: () => void = () => {};
   onGoto: (x: number, y: number, z: number) => void = () => {};
+  onKey: (key: string | null) => void = () => {};
 
   constructor(private w: World, private mind: Mind) {
     (document.getElementById("panel-close") as HTMLElement).addEventListener("click", () => this.close());
@@ -96,6 +97,16 @@ export class Panels {
         this.refresh(true);
       } else if (t.dataset.act === "ask") this.onAsk(this.creature);
       else if (t.dataset.act === "new") this.onNewWorld();
+      else if (t.dataset.act === "key-save") {
+        const input = document.getElementById("key-input") as HTMLInputElement | null;
+        if (input && input.value.trim()) this.onKey(input.value);
+        this.skeleton = "";
+        this.refresh(true);
+      } else if (t.dataset.act === "key-forget") {
+        this.onKey(null);
+        this.skeleton = "";
+        this.refresh(true);
+      }
       else if (t.dataset.act === "birth") {
         const c = who(this.w, this.creature);
         if (c) this.onGoto(c.bx, c.by, c.bz);
@@ -546,6 +557,16 @@ export class Panels {
     this.part("m-legend", series.map((s) => `<span><i style="background:${KIND_COLOR[s.sp]}"></i>${SPECIES[s.sp].many}</span>`).join(""));
   }
 
+  /** How the words are being written right now, and the place to connect a key on a host that has no server. */
+  private wordsBox(): string {
+    const m = this.mind;
+    if (m.routed) return `<p>${m.ready ? "A language model is connected through this machine's own server. The key never reaches the page." : esc(m.note)}</p>`;
+    const s = m.spend;
+    if (m.ready && s) return `<p>A DeepSeek key is connected in this browser. It is kept only here and sent only to DeepSeek. Spent from this browser so far: $${s.total.toFixed(4)} of a $${s.totalLimit.toFixed(2)} ceiling.</p><div class="actions"><button class="link" data-act="key-forget">Forget the key</button></div>`;
+    return `<p>The thinking ones are speaking in a plain built-in voice, because this page has no language model connected. To hear them in their own words, connect a DeepSeek key of your own. It is kept only in this browser, is sent only to DeepSeek, and will not spend more than $0.50 from here.</p>
+      <div class="keyrow"><input id="key-input" type="password" placeholder="DeepSeek API key" autocomplete="off" spellcheck="false" aria-label="DeepSeek API key" /><button class="btn" data-act="key-save">Connect</button></div>${m.note && s?.state === "rejected" ? `<p class="gone">${esc(m.note)}</p>` : ""}`;
+  }
+
   /* ---------------- about ---------------- */
 
   private about(): void {
@@ -561,6 +582,8 @@ export class Panels {
       <p>${SPECIES.map((s) => `<b>${cap(s.many)}</b> (${TIER_NAMES[s.tier].toLowerCase()}): ${s.blurb.charAt(0).toLowerCase() + s.blurb.slice(1)}`).join(" ")}</p>
       <h3>Your hand</h3>
       <p>Drag to spin the planet. Pinch or scroll to go from orbit down to the ground. Right-drag, or turn two fingers, to look around. Choose a kind and tap anywhere to set one down. Rain, drought, cold and food fall where you tap. Tap any creature to follow it and open its mind. The kith remember what comes out of the sky.</p>
+      <h3>Their words</h3>
+      ${this.wordsBox()}
       <h3>This planet</h3>
       <p>World number <span class="seed">${w.seed}</span>, ${when(w.t)}. ${big} large lands and ${t.lands.length - big} islands, ${t.rivers.length} rivers. ${w.births} born, ${w.deaths} died so far. The same number always grows the same planet.</p>
       <p>It is saved on this device as you go, so it will still be here when you come back. Nothing is sent anywhere.</p>

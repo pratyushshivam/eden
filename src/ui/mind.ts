@@ -9,6 +9,8 @@ import {
   type AnswerResult, type Attempt, type AttemptResult, type Creature, type ReactResult, type Idea, type Meeting, type Talk, type TalkResult, type VoiceResult, type World,
 } from "../engine";
 
+import { directMind, directSpend, hasKey, setKey } from "./direct";
+
 export interface Spend {
   session: number;
   total: number;
@@ -47,6 +49,10 @@ export class Mind {
   onMade: (who: number, idea: Idea) => void = () => {};
   onChange: () => void = () => {};
 
+  /** True when there is no server route and the visitor's own key is used straight from this browser. */
+  direct = false;
+  /** True when a server route answers (the local dev server). */
+  routed = false;
   private queue: Job[] = [];
   private busy = false;
   private lastCall = 0;
@@ -68,11 +74,30 @@ export class Mind {
     try {
       const r = await fetch("api/mind", { cache: "no-store" });
       const j = (await r.json()) as { ok?: boolean; spend?: Spend };
-      if (j.ok && j.spend) this.take(j.spend);
-      else this.offline();
+      if (j.ok && j.spend) {
+        this.routed = true;
+        this.take(j.spend);
+      } else this.useOwnKey();
     } catch {
-      this.offline();
+      this.useOwnKey();
     }
+    this.onChange();
+  }
+
+  /** No route here (a static host): fall back to a key the visitor has connected in this browser, if any. */
+  private useOwnKey(): void {
+    this.direct = true;
+    if (hasKey()) this.take(directSpend());
+    else this.offline();
+  }
+
+  /** The visitor connects, or removes, a key of their own. */
+  connect(key: string | null): void {
+    setKey(key);
+    if (this.routed) return;
+    this.direct = true;
+    if (hasKey()) this.take(directSpend());
+    else this.offline();
     this.onChange();
   }
 
@@ -255,6 +280,16 @@ export class Mind {
   }
 
   private async post(kind: string, facts: unknown): Promise<object | null> {
+    if (this.direct) {
+      const j = await directMind(kind, facts);
+      this.take(j.spend);
+      if (j.ok) return j.result && typeof j.result === "object" ? j.result : null;
+      if (j.reason && NOTES[j.reason]) {
+        this.ready = false;
+        this.note = NOTES[j.reason];
+      }
+      return null;
+    }
     try {
       const res = await fetch("api/mind", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ kind, facts }) });
       const j = (await res.json()) as { ok?: boolean; reason?: string; result?: unknown; spend?: Spend };

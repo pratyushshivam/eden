@@ -3,7 +3,8 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "A small living world. Drop creatures in, watch them learn to survive, and read what the thinking ones make of it all.",
+  "description": "A whole small planet in the browser. Every creature has its own neural network. The thinking ones talk, believe, invent, and can meet you.",
+  "homepage": "https://pratyushshivam.github.io/eden/",
   "license": "MIT",
   "scripts": {
     "dev": "vite --port 5260 --strictPort",

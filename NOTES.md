@@ -1,6 +1,8 @@
 # Eden: hand-over notes
 
-A whole small planet in the browser. It starts with plants and water and nothing else. The visitor sets down creatures anywhere; each one runs its own small neural network; the thinking ones talk, believe, invent and wonder about the hand that put them there. Local test build only: nothing is pushed or deployed.
+A whole small planet in the browser. It starts with plants and water and nothing else. The visitor sets down creatures anywhere; each one runs its own small neural network; the thinking ones talk, believe, invent and wonder about the hand that put them there.
+
+Live at https://pratyushshivam.github.io/eden/ (a static page, deployed by GitHub Actions on every push to `main`).
 
 ## Run it
 
@@ -25,6 +27,10 @@ Open http://localhost:5260. The world is saved in the browser as you go.
 - `EDEN_NO_KEY=1 npm run dev` runs with no model at all. `EDEN_SESSION_LIMIT=0.0016 npm run dev` makes the guard trip after three calls.
 - When there is no key, the key is rejected, or a limit is reached, the kith fall back to a plain voice assembled from their own log, with a quiet note on the card. Nothing breaks.
 - Spent during the whole build and test: $0.089 of the $2 (205 calls, about $0.0004 a call).
+
+## Words on the live page
+
+The live page has no server, so `/api/mind` does not exist there. `src/ui/mind.ts` notices and switches to `src/ui/direct.ts`: if the visitor has connected a DeepSeek key of their own in About, the page calls DeepSeek straight from the browser with the same prompts (`server/prompts.ts` is shared by both paths). The key is kept in that browser's local storage only, the spend is counted there, and it stops at $0.50. With no key connected the kith use the plain voice. No key is ever built into the page or stored in the repository.
 
 ## How it works
 
@@ -79,9 +85,8 @@ Rough or missing, plainly:
 - **The avatar has no touch controls**: walking needs a keyboard. The close view is over the shoulder, not truly through its eyes.
 - **Their reaction to the avatar has six choices**, picked by the model per individual. Forming a group around it, or against it, happens only as far as several individuals choosing alike and telling each other.
 
-## What publishing would need later
+## What is still worth doing
 
-- A small serverless relay holding a fresh key (the temporary one must not be reused). `handleMind` in `server/mind.ts` is a plain function of a request body and an environment, so it moves as it stands; the spend file would become a key-value store.
-- A daily cap as well as the total, per-visitor rate limits, and the plain voice as the default when the cap is hit.
+- A small serverless relay with a daily cap, so every visitor hears the kith in their own words without connecting a key. `handleMind` in `server/mind.ts` is a plain function of a request body and an environment, so it moves as it stands; the spend file would become a key-value store.
 - Sharing a world between devices needs a hosted database; saving is on-device only today.
 - A decision on the name. "Eden" is a working name; alternatives: Kith, Small World, Firstlight, Terrarium, Seedworld.
