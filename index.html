@@ -66,6 +66,12 @@
           <button type="button" class="tool" data-tool="food" aria-pressed="false">Food</button>
         </div>
       </div>
+      <div class="group" role="group" aria-label="Be one of them">
+        <p class="label">You</p>
+        <div class="row">
+          <button type="button" class="tool" id="avatar" aria-pressed="false">Take avatar</button>
+        </div>
+      </div>
       <div class="group" role="group" aria-label="Time">
         <p class="label">Time</p>
         <div class="row" id="speeds">
@@ -78,6 +84,18 @@
         </div>
       </div>
     </footer>
+
+    <!-- Walking among them -->
+    <button class="interact" id="interact" type="button" hidden></button>
+    <p class="keys" id="keys" hidden>W A S D to walk · mouse to look · Shift to run · Space to jump · E to talk · V near or far · Esc to free the mouse</p>
+    <form class="chat" id="chat" hidden autocomplete="off">
+      <div class="chat-log" id="chat-log"></div>
+      <div class="chat-row">
+        <input id="chat-input" type="text" maxlength="200" placeholder="Say something" aria-label="Say something to it" />
+        <button class="btn" type="submit">Say</button>
+      </div>
+      <p class="chat-note">The world slows while you type. Esc to stop talking.</p>
+    </form>
 
     <!-- The side panel: a creature, the chronicle, the beliefs, the minds, or about -->
     <aside class="panel" id="panel" hidden>

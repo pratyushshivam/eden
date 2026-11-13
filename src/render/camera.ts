@@ -28,6 +28,9 @@ export class GlobeCam {
   readonly up = new THREE.Vector3();
   readonly fwd = new THREE.Vector3();
   readonly right = new THREE.Vector3();
+  /** True while the visitor is walking about in a body of their own: the view stays behind it and the mouse looks around. */
+  avatar = false;
+  private wasAvatar = false;
   /** 0 in orbit, 1 down in the air near the ground. */
   inAir = 0;
 
@@ -102,12 +105,22 @@ export class GlobeCam {
   }
 
   zoom(factor: number): void {
-    this.gDist = Math.min(440, Math.max(9, this.gDist * factor));
+    this.gDist = this.avatar ? Math.min(40, Math.max(1.4, this.gDist * factor)) : Math.min(440, Math.max(9, this.gDist * factor));
     this.onMove(false);
   }
 
   /** Slides the planet under the pointer. */
+  /** Turns the view by mouse movement: used while the pointer is held by the page. */
+  mouse(dx: number, dy: number): void {
+    this.gAz += dx * 0.0032;
+    this.gTilt = Math.min(0.3, Math.max(-0.8, this.gTilt + dy * 0.0026));
+  }
+
   private pan(dx: number, dy: number): void {
+    if (this.avatar) {
+      this.mouse(-dx * 1.4, -dy * 1.4);
+      return;
+    }
     const perPx = (2 * this.dist * Math.tan((this.camera.fov * Math.PI) / 360)) / this.el.clientHeight;
     const k = (perPx / R) * (this.dist > 200 ? 1.5 : 1);
     this.goal.addScaledVector(this.right, -dx * k).addScaledVector(this.fwd, dy * k).normalize();
@@ -148,6 +161,11 @@ export class GlobeCam {
     this.tgt.copy(this.goal);
   }
 
+  /** Set how far back the view sits. */
+  reach(d: number): void {
+    this.gDist = d;
+  }
+
   /** Back out to the whole planet. */
   home(): void {
     this.gDist = 290;
@@ -161,6 +179,13 @@ export class GlobeCam {
   }
 
   update(dt: number, surfaceAt: (x: number, y: number, z: number) => number): void {
+    if (this.avatar !== this.wasAvatar) {
+      // Stepping into a body brings the view down behind it; stepping out lifts it away again.
+      this.wasAvatar = this.avatar;
+      this.gDist = this.avatar ? 7 : 60;
+      this.gTilt = 0;
+      this.drift = false;
+    }
     if (this.drift) this.goal.applyAxisAngle(Y, dt * 0.03);
     const k = Math.min(1, dt * 6);
     this.tgt.lerp(this.goal, Math.min(1, dt * (this.following ? 5 : 7))).normalize();
@@ -175,19 +200,20 @@ export class GlobeCam {
     this.right.copy(this.east).multiplyScalar(Math.cos(this.az)).addScaledVector(this.north, -Math.sin(this.az));
 
     // From orbit, look straight down. Closer in, tip towards the horizon.
-    const tilt = Math.min(1.36, Math.max(0, 1.02 * (1 - smooth(45, 230, this.dist)) + this.tilt));
+    const tilt = this.avatar ? Math.min(1.5, Math.max(0.45, 1.26 + this.tilt)) : Math.min(1.36, Math.max(0, 1.02 * (1 - smooth(45, 230, this.dist)) + this.tilt));
     const ground = surfaceAt(up.x, up.y, up.z);
     const cam = this.camera;
-    const px = up.x * (R + ground + 0.6), py = up.y * (R + ground + 0.6), pz = up.z * (R + ground + 0.6);
+    const eye = this.avatar ? 1.5 : 0.6;
+    const px = up.x * (R + ground + eye), py = up.y * (R + ground + eye), pz = up.z * (R + ground + eye);
     const c = Math.cos(tilt) * this.dist, s = Math.sin(tilt) * this.dist;
     cam.position.set(px + up.x * c - this.fwd.x * s, py + up.y * c - this.fwd.y * s, pz + up.z * c - this.fwd.z * s);
     // Never under the ground.
     const r = cam.position.length();
-    const floor = R + surfaceAt(cam.position.x / r, cam.position.y / r, cam.position.z / r) + 1.4;
+    const floor = R + surfaceAt(cam.position.x / r, cam.position.y / r, cam.position.z / r) + (this.avatar ? 0.7 : 1.4);
     if (r < floor) cam.position.multiplyScalar(floor / r);
     cam.up.copy(up).multiplyScalar(Math.sin(tilt)).addScaledVector(this.fwd, Math.cos(tilt)).normalize();
     cam.lookAt(px, py, pz);
-    cam.near = Math.max(0.3, this.dist * 0.03);
+    cam.near = this.avatar ? 0.15 : Math.max(0.3, this.dist * 0.03);
     cam.far = this.dist + R * 3.2;
     cam.updateProjectionMatrix();
     this.inAir = 1 - smooth(16, 75, cam.position.length() - R);

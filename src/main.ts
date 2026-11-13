@@ -1,6 +1,6 @@
 import {
   CELLS, CLEVER, DAY, DT, HIDDEN, KITH, N_IN, N_OUT, SEASONS, SPECIES, TIER_NAMES, cellOf, createWorld, dropFood, genomeSize, grid, impression,
-  makeCold, makeDrought, makeRain, nameOf, place, plainVoice, step, sunAt, tellNews, weatherAt, who, craftName,
+  leaveAvatar, makeCold, makeDrought, makeRain, nameOf, place, plainVoice, step, sunAt, takeAvatar, tellNews, weatherAt, who, craftName,
   type Creature, type Idea, type Ping, type Species, type Talk, type World,
 } from "./engine";
 import { FOREST, JUNGLE, LAKE, PLAINS, RIVER, SEA, SHALLOW } from "./engine/terrain";
@@ -33,6 +33,7 @@ async function boot(): Promise<void> {
   history.replaceState(null, "", `?seed=${seed}${debug ? "&debug" : ""}`);
   const saved = params.has("fresh") ? null : await loadWorld(seed);
   const world: World = saved ?? createWorld(seed);
+  if (world.avatarId >= 0) leaveAvatar(world); // a body left standing when the page was closed
   const stage = new Stage($<HTMLCanvasElement>("stage"));
   const sound = new Sound();
   const mind = new Mind(world);
@@ -145,6 +146,11 @@ async function boot(): Promise<void> {
 
   stage.cam.onTap = (x, y) => {
     sound.start();
+    if (embodied) {
+      // In a body, a click on the world takes hold of the mouse for looking around.
+      if (chatWith < 0) void canvas.requestPointerLock?.();
+      return;
+    }
     if (touring) {
       endTour();
       return;
@@ -228,6 +234,160 @@ async function boot(): Promise<void> {
     if (c) toast(`${nameOf(world, id)} has made something new: ${craftName(world, idea.id)}.`, 5200);
   };
 
+  /* ---------------- being one of them ---------------- */
+
+  const canvas = $<HTMLCanvasElement>("stage");
+  const avatarBtn = $("avatar");
+  const held = new Set<string>();
+  let embodied = false;
+  let chatWith = -1;
+  let slow = false;
+  let nearKith = -1;
+  let closeView = false;
+
+  function embody(on: boolean): void {
+    if (on === embodied) return;
+    if (on) {
+      const at = stage.cam.tgt;
+      const me = takeAvatar(world, at.x, at.y, at.z);
+      if (!me) {
+        toast("There is no room for another body right now.");
+        return;
+      }
+      arm(null);
+      showPicker(false);
+      panels.close();
+      deselect();
+      toast("You are among them now, in a body that shines. What they make of you is up to each of them.", 6000);
+    } else {
+      closeChat();
+      leaveAvatar(world);
+      document.exitPointerLock?.();
+      held.clear();
+    }
+    embodied = on;
+    document.body.classList.toggle("embodied", on);
+    avatarBtn.textContent = on ? "Leave avatar" : "Take avatar";
+    avatarBtn.setAttribute("aria-pressed", String(on));
+    $("keys").hidden = !on;
+    $("interact").hidden = true;
+  }
+  avatarBtn.addEventListener("click", () => embody(!embodied));
+  canvas.addEventListener("mousemove", (e) => {
+    if (embodied && document.pointerLockElement === canvas) stage.cam.mouse(e.movementX, e.movementY);
+  });
+  window.addEventListener("keydown", (e) => {
+    if (!embodied || e.target instanceof HTMLInputElement) return;
+    const k = e.key.toLowerCase();
+    if (["w", "a", "s", "d", "arrowup", "arrowdown", "arrowleft", "arrowright", "shift"].includes(k)) {
+      held.add(k);
+      e.preventDefault();
+    } else if (k === " ") {
+      stage.critters.jumpAt = stage.clock;
+      e.preventDefault();
+    } else if (k === "e" && nearKith >= 0) {
+      e.preventDefault();
+      openChat(nearKith);
+    } else if (k === "v") {
+      closeView = !closeView;
+      stage.cam.reach(closeView ? 1.7 : 7);
+    }
+  });
+  window.addEventListener("keyup", (e) => held.delete(e.key.toLowerCase()));
+  window.addEventListener("blur", () => held.clear());
+
+  /** Turns the keys held into a direction for the body, in the frame of the view. */
+  function steer(): void {
+    const k = world.ctl;
+    let f = 0, r = 0;
+    if (chatWith < 0) {
+      if (held.has("w") || held.has("arrowup")) f += 1;
+      if (held.has("s") || held.has("arrowdown")) f -= 1;
+      if (held.has("d") || held.has("arrowright")) r += 1;
+      if (held.has("a") || held.has("arrowleft")) r -= 1;
+    }
+    const c = stage.cam;
+    k.x = c.fwd.x * f + c.right.x * r;
+    k.y = c.fwd.y * f + c.right.y * r;
+    k.z = c.fwd.z * f + c.right.z * r;
+    k.run = held.has("shift");
+  }
+
+  function drawChat(waiting = false): void {
+    const log = $("chat-log");
+    log.innerHTML = "";
+    for (const m of world.chat.filter((x) => x.who === chatWith).slice(-8)) {
+      const p = document.createElement("p");
+      if (m.me) p.className = "me";
+      const b = document.createElement("b");
+      b.textContent = m.me ? "You: " : `${nameOf(world, m.who)}: `;
+      p.append(b, document.createTextNode(m.text));
+      log.appendChild(p);
+    }
+    if (waiting) {
+      const p = document.createElement("p");
+      p.className = "wait";
+      p.textContent = "It is working out what to say…";
+      log.appendChild(p);
+    }
+    log.scrollTop = log.scrollHeight;
+  }
+  function openChat(id: number): void {
+    if (!world.byId.has(id)) return;
+    chatWith = id;
+    slow = true;
+    document.body.classList.add("slow");
+    document.exitPointerLock?.();
+    held.clear();
+    $("chat").hidden = false;
+    $("interact").hidden = true;
+    ($("chat-input") as HTMLInputElement).placeholder = `Say something to ${nameOf(world, id)}`;
+    drawChat();
+    ($("chat-input") as HTMLInputElement).focus();
+  }
+  function closeChat(): void {
+    chatWith = -1;
+    slow = false;
+    document.body.classList.remove("slow");
+    $("chat").hidden = true;
+  }
+  $("chat").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const input = $("chat-input") as HTMLInputElement;
+    const text = input.value.trim();
+    const c = world.byId.get(chatWith);
+    if (!text || !c) return;
+    input.value = "";
+    const id = c.id;
+    say(world.avatarId, "You", text, "", 4200);
+    // Shown at once; the answer is added when it comes.
+    const p = document.createElement("p");
+    p.className = "me";
+    const b = document.createElement("b");
+    b.textContent = "You: ";
+    p.append(b, document.createTextNode(text));
+    $("chat-log").appendChild(p);
+    const wait = document.createElement("p");
+    wait.className = "wait";
+    wait.textContent = "It is working out what to say…";
+    $("chat-log").appendChild(wait);
+    $("chat-log").scrollTop = $("chat-log").scrollHeight;
+    void mind.answer(c, text).then((reply) => {
+      if (reply) say(id, nameOf(world, id), reply, "", 2600 + reply.length * 50);
+      if (chatWith === id) drawChat();
+    });
+  });
+  $("chat-input").addEventListener("keydown", (e) => {
+    if ((e as KeyboardEvent).key === "Escape") closeChat();
+  });
+  $("interact").addEventListener("click", () => {
+    if (nearKith >= 0) openChat(nearKith);
+  });
+  mind.onSpoken = (id, text) => {
+    say(id, nameOf(world, id), text, "", 3000 + text.length * 50);
+    if (embodied && chatWith < 0) toast(`${nameOf(world, id)} spoke to you. Go close and press E to answer.`, 4200);
+  };
+
   /* ---------------- the menu ---------------- */
 
   for (const b of document.querySelectorAll<HTMLButtonElement>(".menu [data-open]")) {
@@ -271,6 +431,7 @@ async function boot(): Promise<void> {
   });
   window.addEventListener("keydown", (e) => {
     if (e.target instanceof HTMLInputElement) return;
+    if (embodied && e.key !== "Escape") return;
     if (e.key === " ") {
       e.preventDefault();
       setSpeed(speed === 0 ? 1 : 0);
@@ -449,7 +610,7 @@ async function boot(): Promise<void> {
     if (now > nextMurmur && stage.cam.dist < 70 && !touring && !photo && speed <= 8) {
       nextMurmur = now + 5200;
       const near = world.creatures
-        .filter((c) => SPECIES[c.sp].tier >= CLEVER && c.id !== stage.selected && !bubbles.some((b) => b.id === c.id))
+        .filter((c) => SPECIES[c.sp].tier >= CLEVER && !c.avatar && c.id !== stage.selected && !bubbles.some((b) => b.id === c.id))
         .map((c) => ({ c, d: (c.x - stage.cam.tgt.x) ** 2 + (c.y - stage.cam.tgt.y) ** 2 + (c.z - stage.cam.tgt.z) ** 2 }))
         .filter((x) => x.d < 0.09 && stage.creatureOnScreen(x.c.id))
         .sort((a, b) => a.d - b.d)
@@ -592,7 +753,15 @@ async function boot(): Promise<void> {
     if (touring) {
       while (beats.length && now - tourStart >= beats[0].at) (beats.shift() as Beat).run();
     }
-    acc += dt * speed;
+    if (embodied) {
+      steer();
+      if (world.ctl.down) {
+        embody(false);
+        toast("You were struck down, and thrown out of that body.", 5200);
+      }
+    }
+    // While you are typing to one of them, the world all but stands still.
+    acc += dt * speed * (slow ? 0.06 : 1);
     // Step the world, but never spend more than a slice of the frame on it.
     const t0 = performance.now();
     const stop = t0 + 8;
@@ -626,6 +795,25 @@ async function boot(): Promise<void> {
     words(now);
     if (now - slowTick > 160) {
       slowTick = now;
+      if (embodied) {
+        // Who is near enough to talk to.
+        const me = world.byId.get(world.avatarId);
+        nearKith = -1;
+        let best = 4.6 / 90;
+        if (me)
+          for (const c of world.creatures) {
+            if (c.sp !== KITH || c.avatar) continue;
+            const d = Math.hypot(c.x - me.x, c.y - me.y, c.z - me.z);
+            if (d < best) {
+              best = d;
+              nearKith = c.id;
+            }
+          }
+        const btn = $("interact");
+        btn.hidden = nearKith < 0 || chatWith >= 0;
+        if (nearKith >= 0) btn.innerHTML = `<b>E</b>Talk to ${nameOf(world, nearKith).replace(/[<>&]/g, "")}`;
+        if (chatWith >= 0 && !world.byId.has(chatWith)) closeChat();
+      }
       hud(now);
       happening(now);
       panels.refresh();

@@ -563,3 +563,72 @@ body.touring .dock, body.touring .happening, body.touring .menu { opacity: 0; po
   body:not([data-panel=""]) .happening { display: none; }
   .intro { bottom: calc(var(--safe-bottom) + 120px); }
 }
+
+/* ---------- walking among them ---------- */
+
+.interact {
+  position: fixed;
+  left: 50%;
+  bottom: calc(var(--safe-bottom) + 132px);
+  transform: translateX(-50%);
+  padding: 9px 16px;
+  background: var(--paper);
+  border: 1px solid var(--ink);
+  font-size: 14px;
+  font-weight: 500;
+  animation: fade 0.2s both;
+}
+.interact b { display: inline-block; min-width: 20px; margin-right: 8px; padding: 0 5px; border: 1px solid var(--ink); font-weight: 600; text-align: center; }
+.keys {
+  position: fixed;
+  left: 50%;
+  top: calc(var(--safe-top) + 58px);
+  transform: translateX(-50%);
+  font-size: 12.5px;
+  color: #fff;
+  text-shadow: 0 1px 8px rgba(3, 4, 10, 0.7);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.chat {
+  position: fixed;
+  left: 50%;
+  bottom: calc(var(--safe-bottom) + 118px);
+  transform: translateX(-50%);
+  width: min(560px, calc(100vw - 2 * var(--gutter)));
+  margin: 0;
+  padding: 14px 16px 12px;
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  animation: fade 0.2s both;
+}
+.chat-log { max-height: 190px; overflow-y: auto; font-size: 14px; line-height: 1.4; user-select: text; -webkit-user-select: text; }
+.chat-log p { margin: 0 0 7px; }
+.chat-log b { font-weight: 600; }
+.chat-log .me b { color: var(--accent); }
+.chat-log .wait { color: var(--ink-faint); }
+.chat-row { display: flex; gap: 8px; margin-top: 6px; }
+.chat-row input {
+  flex: 1;
+  min-width: 0;
+  height: 40px;
+  padding: 0 12px;
+  font: inherit;
+  color: var(--ink);
+  background: var(--sheet);
+  border: 1px solid var(--rule);
+  border-radius: 0;
+  outline: none;
+}
+.chat-row input:focus { border-color: var(--ink); }
+.chat-note { margin-top: 8px; font-size: 11.5px; color: var(--ink-faint); }
+body.slow #stage { filter: saturate(0.75) brightness(0.92); transition: filter 0.3s; }
+body.embodied .happening { display: none; }
+body.photo .interact, body.photo .keys, body.photo .chat { display: none; }
+.meters { display: grid; grid-template-columns: auto 1fr auto; gap: 7px 14px; align-items: center; font-size: 13.5px; }
+.meters small { font-size: 12px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+.mind-note { margin-top: 10px; font-size: 13px; color: var(--ink-soft); }
+@media (max-width: 760px) {
+  .keys { display: none; }
+  .chat, .interact { bottom: calc(var(--safe-bottom) + 92px); }
+}

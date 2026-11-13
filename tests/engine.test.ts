@@ -142,11 +142,18 @@ describe("brains", () => {
     run(w, 5);
     const kids = w.creatures.filter((c) => c.mother >= 0 && w.byId.has(c.mother) && w.byId.has(c.father));
     expect(kids.length).toBeGreaterThan(3);
-    for (const k of kids.slice(0, 8)) {
-      const m = w.byId.get(k.mother) as Creature;
-      const other = w.creatures.find((c) => c.sp === k.sp && c.root !== k.root && c.id !== k.id);
-      if (other) expect(brainDistance(k.brain, m.brain)).toBeLessThan(brainDistance(k.brain, other.brain) + 0.02);
+    // A child takes runs of weights from both parents, so measure it against the nearer of the two, averaged over the children.
+    let toParent = 0, toStranger = 0, n = 0;
+    for (const k of kids) {
+      const m = w.byId.get(k.mother) as Creature, f = w.byId.get(k.father) as Creature;
+      const other = w.creatures.find((c) => c.sp === k.sp && c.root !== k.root && c.id !== k.id && c.id !== k.mother && c.id !== k.father);
+      if (!other) continue;
+      toParent += Math.min(brainDistance(k.brain, m.brain), brainDistance(k.brain, f.brain));
+      toStranger += brainDistance(k.brain, other.brain);
+      n++;
     }
+    expect(n).toBeGreaterThan(3);
+    expect(toParent / n).toBeLessThan(toStranger / n);
   }, 60_000);
 
   it("that have been through many generations outlive brains of pure noise", () => {

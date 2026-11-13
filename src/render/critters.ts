@@ -175,6 +175,11 @@ export class Critters {
   private torch: THREE.InstancedMesh;
   private talk: THREE.InstancedMesh;
   private glow: THREE.InstancedMesh;
+  private aura: THREE.InstancedMesh;
+  private spear: THREE.InstancedMesh;
+  private basket: THREE.InstancedMesh;
+  /** Stage time at which the visitor's body last jumped. */
+  jumpAt = -9;
   private dots: THREE.Points;
   private seen = new Map<number, Seen>();
   private frame = 0;
@@ -206,6 +211,9 @@ export class Critters {
       false, new THREE.MeshBasicMaterial({ color: 0xf2eee5, toneMapped: false }),
     );
     this.glow = make(ball(1), false, new THREE.MeshBasicMaterial({ color: 0x66ffe0, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }));
+    this.aura = make(ball(2), false, new THREE.MeshBasicMaterial({ color: 0xffd27a, transparent: true, opacity: 0.32, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }));
+    this.spear = make(join([part(tube(4), 0x6b4a33, { s: [0.022, 1.25, 0.022], p: [-0.3, 0.62, 0.06], r: [0.12, 0, 0] }), part(cone(4), 0x9a968d, { s: [0.05, 0.16, 0.03], p: [-0.3, 1.31, 0.14] })]), false);
+    this.basket = make(join([part(tube(7, 0.8), 0xb89255, { s: [0.17, 0.26, 0.15], p: [0, 0.42, -0.27] }), part(ball(0), 0xd4491a, { s: 0.06, p: [0.03, 0.56, -0.27] })]), false);
     const dg = new THREE.BufferGeometry();
     dg.setAttribute("position", new THREE.BufferAttribute(new Float32Array(CAP * 3), 3));
     dg.setAttribute("color", new THREE.BufferAttribute(new Float32Array(CAP * 3), 3));
@@ -227,7 +235,7 @@ export class Critters {
   update(w: World, dt: number, time: number, camDist: number, globe: Globe): void {
     this.frame++;
     const counts = new Array(N_SPECIES).fill(0);
-    let woods = 0, talks = 0, torches = 0, glows = 0, birds = 0, dots = 0;
+    let woods = 0, talks = 0, torches = 0, glows = 0, birds = 0, dots = 0, auras = 0, spears = 0, baskets = 0;
     // From far away, draw them larger than life so they can still be seen; from orbit, as points.
     const big = Math.min(3.2, Math.max(1.2, camDist / 50));
     const models = camDist < 250;
@@ -339,6 +347,11 @@ export class Critters {
         }
         if (st === 1 && c.sp === KITH) pitch = 0.3 + Math.sin(time * 6 + c.id) * 0.06;
       }
+      if (c.avatar) {
+        // The visitor's jump: up and down in half a second.
+        const j = time - this.jumpAt;
+        if (j >= 0 && j < 0.55) lift += Math.sin((j / 0.55) * Math.PI) * 1.1;
+      }
       vz.set(sn.hx, sn.hy, sn.hz);
       vx.crossVectors(vy, vz);
       m.makeBasis(vx, vy, vz);
@@ -353,10 +366,13 @@ export class Critters {
       const mesh = this.meshes[c.sp];
       mesh.setMatrixAt(i, m);
       if (c.sp === KITH) {
-        cloakColor(c.traits.hue, col);
+        if (c.avatar) col.setRGB(1.5, 1.32, 0.8);
+        else cloakColor(c.traits.hue, col);
         this.faces.setMatrixAt(i, m);
+        if (c.knows & (1 << 3) && !c.avatar && spears < CAP) this.spear.setMatrixAt(spears++, m);
+        if (c.knows & (1 << 2) && !c.avatar && baskets < CAP) this.basket.setMatrixAt(baskets++, m);
         if (c.carrying && woods < CAP) this.wood.setMatrixAt(woods++, m);
-        if (c.knows & (1 << 11) && sunAt(w, c.x, c.y, c.z) < 0.1 && torches < CAP) this.torch.setMatrixAt(torches++, m);
+        if (c.knows & (1 << 11) && !c.avatar && sunAt(w, c.x, c.y, c.z) < 0.1 && torches < CAP) this.torch.setMatrixAt(torches++, m);
         if (st === 6 && talks < CAP) {
           const up = 1.45 * size + Math.sin(time * 4 + c.id) * 0.05;
           off.set(sn.ux * up, sn.uy * up, sn.uz * up);
@@ -415,6 +431,16 @@ export class Critters {
     set(this.torch, torches);
     set(this.talk, talks);
     set(this.glow, glows);
+    const avSeen = w.avatarId >= 0 ? this.seen.get(w.avatarId) : undefined;
+    if (avSeen && models) {
+      const pulse = 1.15 + Math.sin(time * 2.2) * 0.1;
+      m.compose(p.set(avSeen.x + avSeen.ux * 0.6 * big, avSeen.y + avSeen.uy * 0.6 * big, avSeen.z + avSeen.uz * 0.6 * big), q.identity(), s.setScalar(big * pulse));
+      this.aura.setMatrixAt(0, m);
+      auras = 1;
+    }
+    set(this.aura, auras);
+    set(this.spear, spears);
+    set(this.basket, baskets);
     this.dots.geometry.setDrawRange(0, dots);
     this.dots.geometry.attributes.position.needsUpdate = true;
     this.dots.geometry.attributes.color.needsUpdate = true;

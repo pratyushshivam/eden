@@ -87,6 +87,8 @@ export class Stage {
   private lumps: THREE.InstancedMesh;
   private piles: THREE.InstancedMesh;
   private fireLights: THREE.PointLight[] = [];
+  private selfLight = new THREE.PointLight(0xffd27a, 0, 22, 1.5);
+  private treeIndex = new Map<object, number>();
   private ring: THREE.Mesh;
   private placeRing: THREE.Mesh | null = null;
   private links: THREE.LineSegments;
@@ -248,8 +250,14 @@ export class Stage {
     this.trail.renderOrder = 18;
     this.scene.add(this.links, this.trail);
 
+    this.scene.add(this.selfLight);
     this.critters = new Critters(this.scene);
     this.resize();
+  }
+
+  /** Seconds since the page opened, as the drawing counts them. */
+  get clock(): number {
+    return this.time;
   }
 
   /* ---------------- building a planet ---------------- */
@@ -312,6 +320,7 @@ export class Stage {
       mesh.setMatrixAt(i, tmpM);
     };
     this.groves = [];
+    this.treeIndex = new Map(t.trees.map((tr, i) => [tr as object, i]));
     const grove = (mesh: THREE.InstancedMesh, list: { x: number; y: number; z: number }[]): void => {
       this.groves.push({ mesh, at: list, base: list.map((_, i) => { const mm = new THREE.Matrix4(); mesh.getMatrixAt(i, mm); return mm; }), down: new Uint8Array(list.length) });
     };
@@ -466,8 +475,10 @@ export class Stage {
     this.fps += (1 / Math.max(dt, 0.001) - this.fps) * 0.05;
     const cam = this.cam;
 
-    // The followed creature leads the camera.
-    const sel = this.selected >= 0 ? w.byId.get(this.selected) : undefined;
+    // The followed creature leads the camera; in a body of your own, that body does.
+    const me = w.avatarId >= 0 ? w.byId.get(w.avatarId) : undefined;
+    cam.avatar = !!me;
+    const sel = me ?? (this.selected >= 0 ? w.byId.get(this.selected) : undefined);
     const selAt = sel ? this.critters.where(sel.id) : undefined;
     if (sel && selAt) cam.follow(selAt.ux, selAt.uy, selAt.uz);
     cam.update(dt, (x, y, z) => globe.surfaceAt(x, y, z));
@@ -531,8 +542,13 @@ export class Stage {
     this.things(w);
     this.critters.update(w, dt, this.time, cam.dist, globe);
 
-    this.partTrees(sel && selAt && cam.dist < 70 && !sel.alt ? selAt : null);
-    if (sel && selAt) {
+    this.partTrees(sel && selAt && cam.dist < 70 && !sel.alt ? selAt : null, w);
+    if (me && selAt) {
+      const dark = 1 - smooth(-0.15, 0.25, sunAt(w, me.x, me.y, me.z));
+      this.selfLight.position.set(selAt.x + selAt.ux * 1.4, selAt.y + selAt.uy * 1.4, selAt.z + selAt.uz * 1.4);
+      this.selfLight.intensity = 6 + 34 * dark;
+    } else this.selfLight.intensity = 0;
+    if (sel && selAt && !me) {
       this.ring.visible = true;
       vy.set(selAt.ux, selAt.uy, selAt.uz);
       this.ring.quaternion.setFromUnitVectors(UP, vy);
@@ -561,13 +577,15 @@ export class Stage {
   }
 
   /** The trees right over the followed creature shrink out of the way, and grow back when it moves on. */
-  private partTrees(at: { ux: number; uy: number; uz: number } | null): void {
+  private partTrees(at: { ux: number; uy: number; uz: number } | null, w: World): void {
     const reach = (3.3 / R) ** 2;
     for (const g of this.groves) {
       let changed = false;
       for (let i = 0; i < g.at.length; i++) {
         const tr = g.at[i];
-        const near = at !== null && (tr.x - at.ux) ** 2 + (tr.y - at.uy) ** 2 + (tr.z - at.uz) ** 2 < reach ? 1 : 0;
+        // Out of the way of whoever is followed, or cut down for wood: either way it is not drawn standing.
+        const cut = w.felled[this.treeIndex.get(tr) ?? 0] > w.t;
+        const near = cut || (at !== null && (tr.x - at.ux) ** 2 + (tr.y - at.uy) ** 2 + (tr.z - at.uz) ** 2 < reach) ? 1 : 0;
         if (near === g.down[i]) continue;
         g.down[i] = near;
         changed = true;

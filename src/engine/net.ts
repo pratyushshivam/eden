@@ -174,11 +174,11 @@ export function founderBrain(sp: Species, rng: Rng): Float32Array {
     // Folk: fetch wood and make fire when cold or dark, shelter near home, keep off believed-bad ground, try things.
     out(OUT.gather, F.cold, 1.5);
     out(OUT.gather, F.night, 0.5);
-    bias(OUT.gather, -0.3);
+    bias(OUT.gather, 0.12);
     out(OUT.fire, F.cold, 1.6);
     out(OUT.fire, F.night, 0.7);
     bias(OUT.fire, -0.2);
-    bias(OUT.shelter, 0.1);
+    bias(OUT.shelter, 0.5);
     out(OUT.shelter, F.cold, -0.8);
     bias(OUT.mark, -0.55);
     out(VEC.warm, F.cold, 1.6);

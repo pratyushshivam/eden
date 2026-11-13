@@ -5,8 +5,8 @@
  * here falls back to the plain built-in voice and the world carries on.
  */
 import {
-  DAY, KITH, SPECIES, applyAttempt, applyMeeting, applyVoice, attemptFacts, coinName, giveName, kithFacts, nowFacts, plainMeeting, plainVoice, tellables,
-  type Attempt, type AttemptResult, type Creature, type Idea, type Meeting, type Talk, type TalkResult, type VoiceResult, type World,
+  DAY, KITH, SPECIES, applyAnswer, applyAttempt, applyMeeting, applyReact, applyVoice, attemptFacts, strangerFacts, coinName, giveName, kithFacts, nowFacts, plainMeeting, plainVoice, tellables,
+  type AnswerResult, type Attempt, type AttemptResult, type Creature, type ReactResult, type Idea, type Meeting, type Talk, type TalkResult, type VoiceResult, type World,
 } from "../engine";
 
 export interface Spend {
@@ -19,7 +19,7 @@ export interface Spend {
 }
 
 interface Job {
-  kind: "voice" | "talk" | "make";
+  kind: "voice" | "talk" | "make" | "react";
   id: number;
   meeting?: Meeting;
   attempt?: Attempt;
@@ -53,6 +53,9 @@ export class Mind {
   private lastAuto = 0;
   private lastTalk = 0;
   private lastMake = 0;
+  private lastReact = 0;
+  /** Called when a kith says something aloud to the visitor's body. */
+  onSpoken: (who: number, text: string) => void = () => {};
   private asked = new Map<number, number>();
   private unnamedSince = new Map<number, number>();
   private tick = 0;
@@ -86,7 +89,7 @@ export class Mind {
 
   /** Asks for a creature's inner voice. With `force`, even if little has happened since last time. */
   voice(c: Creature, force = false, pri = 10): void {
-    if (c.sp !== KITH || !c.alive || this.waiting.has(c.id)) return;
+    if (c.sp !== KITH || !c.alive || c.avatar || this.waiting.has(c.id)) return;
     const askedAt = this.asked.get(c.id);
     if (!force && askedAt !== undefined && c.log.length - askedAt < 3 && c.thoughts.length) return;
     this.asked.set(c.id, c.log.length);
@@ -124,6 +127,19 @@ export class Mind {
         if (t && t.ideas.length) this.onTalk(t);
       }
     }
+    // First sight of the stranger: each one decides for itself what to do about it.
+    while (w.sightings.length) {
+      const s = w.sightings.shift() as { who: number };
+      const c = w.byId.get(s.who);
+      if (!c) continue;
+      if (this.ready && now - this.lastReact > 2500 && this.queue.filter((j) => j.kind === "react").length < 3) {
+        this.lastReact = now;
+        this.queue.push({ kind: "react", id: c.id, pri: 9 });
+      } else {
+        const said = applyReact(w, c, null);
+        if (said) this.onSpoken(c.id, said);
+      }
+    }
     // Makings: the model decides what this one makes and what it calls it; otherwise chance does.
     while (w.attempts.length) {
       const a = w.attempts.shift() as Attempt;
@@ -138,7 +154,7 @@ export class Mind {
     // Names: a kith that has come of age names itself. With a model, in its own words.
     if (++this.tick % 30 === 0) {
       for (const c of w.creatures) {
-        if (c.sp !== KITH || c.name) continue;
+        if (c.sp !== KITH || c.name || c.avatar) continue;
         if ((w.t - c.born) / DAY < SPECIES[KITH].adultAt) continue;
         const since = this.unnamedSince.get(c.id);
         if (since === undefined) {
@@ -171,6 +187,15 @@ export class Mind {
         const live = w.byId.get(job.id);
         if (!live) return;
         if (!r || !applyVoice(w, live, r as VoiceResult)) this.plain(live);
+      } else if (job.kind === "react") {
+        const c = w.byId.get(job.id);
+        const stranger = c ? strangerFacts(w, c) : null;
+        if (!c) return;
+        const r = stranger ? await this.post("react", { now: nowFacts(w, c), one: kithFacts(w, c, 10), stranger, names_taken: this.taken() }) : null;
+        const live = w.byId.get(job.id);
+        if (!live) return;
+        const said = applyReact(w, live, r as ReactResult | null);
+        if (said) this.onSpoken(live.id, said);
       } else if (job.kind === "make" && job.attempt) {
         const facts = attemptFacts(w, job.attempt);
         if (!facts) return;
@@ -197,6 +222,27 @@ export class Mind {
       this.busy = false;
       this.onChange();
     }
+  }
+
+  /** The visitor says something to a kith; resolves with what it answers. */
+  async answer(c: Creature, said: string): Promise<string> {
+    const w = this.w;
+    const stranger = strangerFacts(w, c);
+    let r: object | null = null;
+    const facts = stranger ? { now: nowFacts(w, c), one: kithFacts(w, c, 10), stranger, said: said.slice(0, 240) } : null;
+    if (this.ready && facts) {
+      r = await this.post("answer", facts);
+      // The route keeps a short gap between calls: if it was busy, wait a moment and ask once more.
+      if (!r && this.ready) {
+        await new Promise((done) => setTimeout(done, 1600));
+        r = await this.post("answer", facts);
+      }
+    }
+    const live = w.byId.get(c.id);
+    if (!live) return "";
+    const reply = applyAnswer(w, live, said, r as AnswerResult | null);
+    this.onChange();
+    return reply;
   }
 
   /** Names already in use, so a new one is never a repeat. */

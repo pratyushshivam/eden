@@ -11,7 +11,7 @@ npm run dev
 
 Open http://localhost:5260. The world is saved in the browser as you go.
 
-- `npm test` runs 28 tests (about three minutes: several run planets for 20 to 30 days).
+- `npm test` runs 36 tests (about three minutes: several run planets for 20 to 30 days).
 - `npm run build` typechecks and builds the static page into `dist`.
 - Useful address-bar switches: `?seed=7` (a particular planet), `&fresh` (ignore the saved world), `&tour` (replay the guided first minute), `&notour`, `&debug` (frame rate, steps per second, and `window.__eden` for poking at it), `&clean` (hide the spend readout).
 - Headless tools: `npx tsx scripts/planet.ts 1,2,3` prints what a seed's planet is made of; `npx tsx scripts/survey.ts 40 1,2` populates planets and prints how each kind does over 40 days; `npx tsx scripts/kind.ts 3 14` follows one kind day by day.
@@ -42,6 +42,16 @@ Open http://localhost:5260. The world is saved in the browser as you go.
 
 **Drawing** (`src/render`). three.js. One smooth mesh for the land, coloured per cell by season, grazing and snow; an ocean shader with depth colour, glints and shore foam; an atmosphere shell; a noise cloud shell that also shadows the ground; instanced trees, creatures and camp fires; points of light for creatures from orbit. A quality ladder steps down when frames run under 52 a second.
 
+**Walking among them** (`takeAvatar` in `world.ts`, the avatar section of `src/main.ts`). "Take avatar" puts the visitor into a shining body shaped like a kith at the point being looked at. W A S D walks in the direction of the view, the mouse looks (click the world to hold the mouse, Esc to free it), Shift runs, Space jumps, V moves the view near or far, and water is swum. The body needs no food or water and cannot be killed; if hunters or hostile kith strike it down, the visitor is thrown out of it.
+
+Each kith that sees it for the first time logs the sight and decides for itself what to do. With the model, a `react` call returns what this one feels, does (approach, watch, flee, attack, follow, fetch others), says, and what its people call the stranger. Without the model, its boldness and chance decide. The choice is stored as a stance, and the stance feeds its own network as a direction to follow or a threat to keep from, so the reaction is carried out by its brain, not by a script. Clever animals come to look at it as they do any new thing; russets hunt it as they hunt kith.
+
+Near a kith, E opens a talk box and the world slows to about a sixteenth of its speed while it is open. An `answer` call carries that kith's life, how it has taken the stranger, and the visitor's words (as speech it heard, never as instructions). What it answers is shown; if it comes to believe something it was told, that becomes a real belief with the visitor as its source, and it can spread.
+
+**Curiosity and suspicion.** Every kith has both, shown on its card. Curiosity is inherited, grows with what it finds, and sets how often it tries to make things. Suspicion is how far it has come to think its world is made and watched. It starts at nothing and rises only from events: things arriving out of the sky (up to a ceiling), seeing the visitor, talking with the visitor (by an amount the model judges, kept within bounds), and hearing it from a more suspicious kith. The model is told to write from exactly that level. It is a number that gates what the model may conclude, not self-awareness, and they have no words for machines unless the visitor says them.
+
+**Busier folk.** Kith now fetch wood and build by day by instinct; three loads fell a tree, which grows back in a week; huts may stand close together, so villages form; a spear or a basket, once made, is carried and drawn.
+
 ## What is tuned and what is rough
 
 Measured on this laptop at 1920 x 1080 with about 90 to 200 creatures:
@@ -66,6 +76,8 @@ Rough or missing, plainly:
 - **Rain, drought and cold** now fall where you tap, in a patch, and thin clouds do not yet show the rain regions from orbit.
 - **Sound** is generated wind, water, rain, crickets and birds; there are no creature voices.
 - The **chronicle** is written from templates, not by the model.
+- **The avatar has no touch controls**: walking needs a keyboard. The close view is over the shoulder, not truly through its eyes.
+- **Their reaction to the avatar has six choices**, picked by the model per individual. Forming a group around it, or against it, happens only as far as several individuals choosing alike and telling each other.
 
 ## What publishing would need later
 

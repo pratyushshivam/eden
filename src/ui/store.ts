@@ -8,7 +8,7 @@ import { createWorld, type World } from "../engine";
 const DB = "eden";
 const STORE = "worlds";
 /** Raise this when the shape of a saved world changes; older saves are then ignored. */
-const VERSION = 3;
+const VERSION = 4;
 
 function open(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {

@@ -6,7 +6,7 @@
 import { CLEVER, DAY, IN, KITH, OUT, SEASONS, SEASON_DAYS, SPECIES, VEC } from "./config";
 import { CRAFTS, materialWords } from "./craft";
 import type { Attempt, Creature, Held, Idea, LogEntry, Meeting, News, Talk, Thought, World } from "./types";
-import { ageDays, craftOptions, discover, hold, makeIdea, settleAttempt, settleMeeting, sunAt, weatherAt, who } from "./world";
+import { ageDays, arc, craftOptions, discover, hold, makeIdea, settleAttempt, settleMeeting, sunAt, weatherAt, who } from "./world";
 
 /* ---------------- names ---------------- */
 
@@ -21,6 +21,7 @@ export function placeName(w: World, p: number): string {
 export function nameOf(w: World, id: number): string {
   const c = who(w, id);
   if (!c) return "one now forgotten";
+  if (c.avatar) return w.avatarName ?? "the shining stranger";
   if (c.name) return c.name;
   const def = SPECIES[c.sp];
   return c.sp === KITH ? "one without a name yet" : `a ${def.one}`;
@@ -178,6 +179,10 @@ export function tellLog(w: World, e: LogEntry): string {
     case "skyCold": return `Felt a sudden cold fall${near}, from nowhere.`;
     case "skyDry": return `Felt the rains stop${near}, as if something had turned them away.`;
     case "stranger": return `Met ${o}, one of its own kind from another land, who speaks of things by other names.`;
+    case "sawGlow": return `Saw a stranger${near}: shaped like its own kind, but shining with its own light, born of no one.`;
+    case "spokeGlow": return `Spoke with ${nameOf(w, w.avatarId >= 0 ? w.avatarId : e.o)}, the shining one, face to face.`;
+    case "struckGlow": return `Struck at the shining stranger${near}.`;
+    case "felled": return `Brought down a tree for its wood${near}.`;
   }
 }
 
@@ -210,6 +215,11 @@ export function tellNews(w: World, n: News): string {
     case "landfall": return `${cap(a)} crossed the water and came ashore${near}: the first of its people on ${w.terrain.lands[n.n]?.desc ?? "that land"}.`;
     case "groupsMet": return `Two peoples met for the first time${near}: ${a} and ${b}.`;
     case "firstHunt": return `${cap(a)} hunted with a spear for the first time${near}.`;
+    case "avatar": return `You came down among them in a body of your own${near}.`;
+    case "firstSight": return `${cap(a)} was the first to see the shining stranger${near}.`;
+    case "firstFell": return `${cap(a)} brought down the first tree${near}.`;
+    case "suspects": return `${cap(a)} has begun to suspect that the world is made, and watched.`;
+    case "knows": return `${cap(a)} is now all but sure: the world is a made thing, held inside something larger.`;
     case "firstDeath": {
       const c = who(w, n.a);
       return `The first death: ${c ? `a ${SPECIES[c.sp].one}` : "a creature"}${c?.name ? ` called ${c.name}` : ""}, ${c ? causeWords(c) : ""}${near}.`;
@@ -241,6 +251,7 @@ export function tellNews(w: World, n: News): string {
     case "cold": return `A sudden cold fell${near}.`;
     case "coldEnd": return "A hard cold lifted.";
     case "lore": return `${cap(a)} said something the others repeated: "${tellIdea(w, w.ideas[n.n])}"`;
+    case "namedYou": return `${cap(a)} gave the shining stranger a name: ${w.avatarName ?? ""}.`;
     default: return n.kind;
   }
 }
@@ -294,6 +305,10 @@ export interface KithFacts {
   kin: string[];
   life: string[];
   beliefs: string[];
+  /** How readily it looks into things, and how far it has come to suspect its world is made: words, then 0..1. */
+  curiosity: string;
+  suspicion: string;
+  suspicion_level: number;
   /** What it knows how to make, and what it has had in its hands. */
   makes: string[];
   handled: string[];
@@ -314,12 +329,27 @@ export function kithFacts(w: World, c: Creature, lifeLines = 14): KithFacts {
     kin: kinLine(w, c),
     life: log.map((e) => `${when(e.t)}: ${tellLog(w, e)}`),
     beliefs: c.beliefs.filter((h) => w.ideas[h.idea].kind !== "craft").map((h) => tellIdea(w, w.ideas[h.idea])),
+    curiosity: c.wonder > 0.7 ? "restless, must look into everything" : c.wonder > 0.45 ? "curious" : "incurious, keeps to what it knows",
+    suspicion: suspectWords(c.suspect),
+    suspicion_level: Math.round(c.suspect * 100) / 100,
     makes: c.beliefs.filter((h) => w.ideas[h.idea].kind === "craft").map((h) => `${craftName(w, h.idea)}: ${CRAFTS[w.ideas[h.idea].craft].does}`),
     handled: materialWords(c.handled),
     land: c.land >= 0 ? w.terrain.lands[c.land].desc : "the open sea",
     places: w.terrain.places.filter((p) => c.seen & (1 << p.id)).map((p) => ({ id: p.id, what: p.desc, name: w.placeNames[p.id] })),
   };
 }
+
+/** What a level of suspicion means, in words the model can write from. */
+export function suspectWords(s: number): string {
+  if (s < 0.1) return "none: takes the world as it finds it";
+  if (s < 0.3) return "faint: has noticed that some things come from nowhere, and has no account of it";
+  if (s < 0.5) return "growing: thinks something unseen puts things into the world and takes an interest in it";
+  if (s < 0.7) return "strong: thinks the world is watched, and that the watcher can reach into it at will";
+  if (s < 0.9) return "deep: thinks the whole world may be a made thing, small, with an outside that the watcher lives in";
+  return "certain: holds that this world is made and kept inside something that belongs to the watcher, and that the watcher's world is the real one";
+}
+
+export const STANCE_WORDS = ["has not decided what to make of it", "is curious about it and drawn to it", "is wary of it and keeps away", "is set against it and would drive it off", "is devoted to it and follows it"];
 
 export function nowFacts(w: World, c: Creature): { season: string; time: string; weather: string } {
   const sun = sunAt(w, c.x, c.y, c.z);
@@ -575,4 +605,110 @@ export function lineage(w: World, c: Creature): Creature[] {
     if (cur) out.push(cur);
   }
   return out;
+}
+
+/* ---------------- the shining stranger ---------------- */
+
+const DOES = ["watch", "approach", "flee", "attack", "follow", "fetch_others", "stay"];
+/** What the model says a kith does about the stranger, as a stance. -1 leaves it as it was. */
+function stanceOf(does: unknown): number {
+  switch (does) {
+    case "approach": return 1;
+    case "watch": return 0;
+    case "flee": return 2;
+    case "attack": return 3;
+    case "follow": return 4;
+    case "fetch_others": return 1;
+    default: return -1;
+  }
+}
+
+/** What a kith is looking at when it looks at the visitor's body. */
+export function strangerFacts(w: World, c: Creature): { steps_away: number; what: string; called: string | null; this_one: string; said_so_far: string[] } | null {
+  const av = w.byId.get(w.avatarId);
+  if (!av) return null;
+  return {
+    steps_away: Math.round(arc(av.x, av.y, av.z, c.x, c.y, c.z)),
+    what: "a stranger: shaped like one of its own kind, but shining with its own light, born of no mother, belonging to no people. It walks, it watches, and sometimes it speaks.",
+    called: w.avatarName,
+    this_one: STANCE_WORDS[c.stance] ?? STANCE_WORDS[0],
+    said_so_far: c.log.filter((e) => e.k === "spokeGlow").length ? w.chat.filter((m) => m.who === c.id).slice(-6).map((m) => `${m.me ? "stranger" : "it"}: ${m.text}`) : [],
+  };
+}
+
+export interface ReactResult {
+  feels?: unknown;
+  does?: unknown;
+  says?: unknown;
+  calls_it?: unknown;
+}
+
+/** Takes the model's account of how this kith takes the stranger, and makes it so. Returns what it says aloud, if anything. */
+export function applyReact(w: World, c: Creature, r: ReactResult | null): string {
+  if (!r || !DOES.includes(String(r.does))) {
+    if (c.stance === 0) c.stance = c.traits.bold > 0.5 ? 1 : 2;
+    return "";
+  }
+  const st = stanceOf(r.does);
+  if (st >= 0) c.stance = st;
+  if (typeof r.feels === "string" && r.feels.trim().length > 8) {
+    c.thoughts.push({ t: w.t, text: r.feels.trim().slice(0, 400), by: "model" });
+    if (c.thoughts.length > 6) c.thoughts.shift();
+  }
+  if (!w.avatarName) {
+    const n = cleanName(r.calls_it);
+    if (n && !nameTaken(w, n)) {
+      w.avatarName = n;
+      w.news.push({ id: w.news.length, t: w.t, kind: "namedYou", a: c.id, b: -1, p: -1, n: -1 });
+    }
+  }
+  return typeof r.says === "string" ? r.says.trim().slice(0, 200) : "";
+}
+
+export interface AnswerResult {
+  says?: unknown;
+  does?: unknown;
+  believes?: unknown;
+  suspect?: unknown;
+  thought?: unknown;
+}
+
+/**
+ * The visitor has spoken to a kith, and the model has written what it answers.
+ * What the visitor said is real to it: it may come to believe it, and pass it on.
+ */
+export function applyAnswer(w: World, c: Creature, said: string, r: AnswerResult | null): string {
+  const first = !c.log.some((e) => e.k === "spokeGlow");
+  c.log.push({ t: w.t, k: "spokeGlow", p: -1, o: w.avatarId, n: -1 });
+  if (first) c.suspect = Math.min(1, c.suspect + 0.06);
+  w.chat.push({ who: c.id, me: true, text: said.slice(0, 240), t: w.t });
+  let reply = "";
+  if (r && typeof r.says === "string" && r.says.trim()) {
+    reply = r.says.trim().slice(0, 300);
+    const st = stanceOf(r.does);
+    if (st >= 0) c.stance = st;
+    // How much the exchange moved it towards thinking the world is made: the model's reading, kept within bounds.
+    const d = Number(r.suspect);
+    if (Number.isFinite(d)) c.suspect = Math.max(0, Math.min(1, c.suspect + Math.max(-0.1, Math.min(0.3, d))));
+    const b = r.believes as { kind?: unknown; place_id?: unknown; text?: unknown } | null | undefined;
+    if (b && typeof b === "object" && typeof b.text === "string" && b.text.trim().length > 6) {
+      const text = b.text.trim().slice(0, 140);
+      const place = Number.isInteger(b.place_id) && (b.place_id as number) >= 0 && (b.place_id as number) < w.terrain.places.length ? (b.place_id as number) : -1;
+      const kind = (b.kind === "danger" || b.kind === "good") && place >= 0 ? b.kind : "lore";
+      const idea = makeIdea(w, kind, kind === "lore" ? -1 : place, -1, w.avatarId, kind === "lore" ? text : "");
+      if (kind !== "lore" && !idea.text) idea.text = text;
+      if (hold(w, c, idea, 0.9, w.avatarId)) c.log.push({ t: w.t, k: "heard", p: place, o: w.avatarId, n: idea.id });
+    }
+    if (typeof r.thought === "string" && r.thought.trim().length > 8) {
+      c.thoughts.push({ t: w.t, text: r.thought.trim().slice(0, 400), by: "model" });
+      if (c.thoughts.length > 6) c.thoughts.shift();
+    }
+  } else {
+    // No model: it answers plainly, by how it has taken the stranger.
+    reply = ["I do not know what you are.", "You shine. Why do you shine?", "Keep away from me.", "Go. You do not belong here.", "I will walk where you walk."][c.stance] ?? "I do not know what you are.";
+    if (c.stance === 0) c.stance = c.traits.bold > 0.5 ? 1 : 2;
+  }
+  w.chat.push({ who: c.id, me: false, text: reply, t: w.t });
+  if (w.chat.length > 80) w.chat.splice(0, w.chat.length - 80);
+  return reply;
 }

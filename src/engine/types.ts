@@ -20,7 +20,8 @@ export type LogKind =
   | "mated" | "child" | "lostMate" | "lostChild" | "lostParent" | "sawKill" | "escaped" | "hurt"
   | "kill" | "fire" | "shelter" | "marker" | "cold" | "drought" | "snow" | "heard" | "told" | "met" | "named" | "believed"
   | "made" | "learned" | "sailed" | "landed" | "hunted"
-  | "skyKin" | "skyBeast" | "skyFood" | "skyRain" | "skyCold" | "skyDry" | "stranger";
+  | "skyKin" | "skyBeast" | "skyFood" | "skyRain" | "skyCold" | "skyDry" | "stranger"
+  | "sawGlow" | "spokeGlow" | "struckGlow" | "felled";
 
 /** A belief a creature holds. The idea itself lives in the world, shared. */
 export interface Held {
@@ -69,7 +70,7 @@ export interface Traits {
   speed: number;
   size: number;
   sense: number;
-  /** 0 timid .. 1 bold; only described, never read by the rules. */
+  /** 0 timid .. 1 bold. Colours how it is described, and how it first takes a stranger when no words are available. */
   bold: number;
   /** Colour shift, -1..1. */
   hue: number;
@@ -156,6 +157,15 @@ export interface Creature {
   /** How many times it was found at each place, out of `samples`. */
   at: Uint16Array;
   samples: number;
+  /** True for the one body the visitor is walking around in. */
+  avatar: boolean;
+  /** How it has decided to treat the shining stranger: 0 undecided, 1 curious, 2 wary, 3 hostile, 4 devoted. */
+  stance: number;
+  metAvatar: boolean;
+  /** 0..1: how strongly it has come to suspect that its world is made and watched. Rises only from what happens to it and what it is told. */
+  suspect: number;
+  /** 0..1: how readily it looks into things and tries things. Inherited, and fed by what it finds. */
+  wonder: number;
   /** Bits: which materials it has handled, and which things it knows how to make. */
   handled: number;
   knows: number;
@@ -281,6 +291,18 @@ export interface World {
   piles: Lump[];
   blobs: Blob[];
   novel: Novelty[];
+  /** The visitor's own body in the world, if they have taken one, and what the kith have come to call it. */
+  avatarId: number;
+  avatarName: string | null;
+  /** Where the visitor wants that body to go: a direction along the ground (zero for standing still). `down` is set if it is struck down. */
+  ctl: { x: number; y: number; z: number; run: boolean; down: boolean };
+  /** What the visitor and the kith have said to each other, newest last. */
+  chat: { who: number; me: boolean; text: string; t: number }[];
+  /** Kith who have just seen the stranger for the first time and have yet to decide what to make of it. */
+  sightings: { who: number; t: number }[];
+  /** For each tree: how many times wood has been taken, and the time it will have grown back if it was felled. */
+  cuts: Uint8Array;
+  felled: Float64Array;
   /** Rain falling and ground wetness by region (6 faces of REGION x REGION). */
   rainGrid: Float32Array;
   wetGrid: Float32Array;

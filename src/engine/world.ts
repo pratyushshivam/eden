@@ -23,7 +23,7 @@ const BS = 18; // bucket size, units
 const RR = R + 14;
 const BD = Math.ceil((2 * RR) / BS);
 const WATER_SMELL = 60;
-const F_HUNGRY = 1, F_PARCHED = 2, F_WADED = 4, F_GROWN = 8, F_COLD = 16, F_FLED = 32, F_DROUGHT = 64, F_SAILED = 128;
+const F_HUNGRY = 1, F_PARCHED = 2, F_WADED = 4, F_GROWN = 8, F_COLD = 16, F_FLED = 32, F_DROUGHT = 64, F_SAILED = 128, F_STRUCK = 256;
 
 const clamp01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v);
 const bucketOf = (x: number, y: number, z: number): number =>
@@ -89,6 +89,8 @@ export function createWorld(seed: number): World {
     grass, bush, fish,
     creatures: [], byId: new Map(), gone: new Map(), nextId: 1,
     fires: [], shelters: [], markers: [], carcasses: [], piles: [], blobs: [], novel: [],
+    avatarId: -1, avatarName: null, ctl: { x: 0, y: 0, z: 0, run: false, down: false }, sightings: [], chat: [],
+    cuts: new Uint8Array(terrain.trees.length), felled: new Float64Array(terrain.trees.length),
     rainGrid: new Float32Array(N_REGION), wetGrid: new Float32Array(N_REGION),
     sunX: 1, sunY: 0, sunZ: 0, season: 0,
     ideas: [], placeNames: terrain.places.map(() => null), placeNamedBy: terrain.places.map(() => -1),
@@ -225,6 +227,7 @@ function blank(w: World, sp: Species, x: number, y: number, z: number, traits: T
     mateCd: 0, talkCd: 0, markCd: 0, tinkerCd: 0, pause: 0, detour: 0, carrying: 0, follow: -1, avoid: -1,
     flags: 0, seen: 0, at: new Uint16Array(32), samples: 0, handled: 0, knows: 0, land: w.terrain.land[cellOf(x, y, z)], bornLand: w.terrain.land[cellOf(x, y, z)],
     path: [x, y, z],
+    avatar: false, stance: 0, metAvatar: false, suspect: 0, wonder: clamp01(0.4 + w.rng.gauss() * 0.18),
     name: null, log: [], beliefs: [], thoughts: [],
     alive: true, died: 0, cause: "", kills: 0,
   };
@@ -243,6 +246,9 @@ function fromTheSky(w: World, x: number, y: number, z: number, kind: LogKind, n 
   for (const c of w.creatures) {
     if (c.sp !== KITH || c.id === skip || arc(c.x, c.y, c.z, x, y, z) > 22) continue;
     log(w, c, kind, placeAt(w.terrain, x, y, z), -1, n);
+    // Each thing that comes from nowhere makes it wonder a little more, up to a point.
+    if (c.suspect < 0.5) c.suspect += 0.02;
+    c.wonder = Math.min(1, c.wonder + 0.03);
   }
 }
 
@@ -534,6 +540,7 @@ export function craftOptions(c: Creature): number[] {
 /** A kith makes something for the first time in its life. `name` is what it calls the thing. */
 export function discover(w: World, c: Creature, craft: number, name = ""): Idea | null {
   if (c.knows & (1 << craft) || !craftOptions(c).includes(craft)) return null;
+  c.wonder = Math.min(1, c.wonder + 0.05);
   const idea = makeIdea(w, "craft", -1, -1, c.id, name || CRAFTS[craft].plain, -1, craft);
   if (!hold(w, c, idea, 1, -1)) return null;
   const p = placeAt(w.terrain, c.x, c.y, c.z);
@@ -576,6 +583,12 @@ const hunts = (c: Creature, o: Creature): boolean =>
 
 function die(w: World, c: Creature, cause: string, by = -1): void {
   if (!c.alive) return;
+  if (c.avatar) {
+    // The visitor's body is not killed: it is struck down, and the visitor is thrown out of it.
+    c.health = 0.05;
+    w.ctl.down = true;
+    return;
+  }
   c.alive = false;
   c.died = w.t;
   c.cause = cause;
@@ -649,6 +662,7 @@ function birth(w: World, m: Creature, f: Creature): void {
   c.waterZ = m.waterZ;
   c.hasWater = m.hasWater;
   c.follow = m.id;
+  c.wonder = clamp01((m.wonder + f.wonder) / 2 + w.rng.gauss() * 0.08);
   c.alt = m.alt;
   admit(w, c);
   w.births++;
@@ -683,6 +697,7 @@ function nearFire(w: World, x: number, y: number, z: number, r: number): boolean
 
 /** Looks around, fills the senses, runs the network, and does the once-in-a-while things. */
 function sense(w: World, c: Creature, idx: number): void {
+  if (c.avatar) return;
   const t = w.terrain;
   const st = statics(w);
   const def = SPECIES[c.sp];
@@ -930,6 +945,36 @@ function sense(w: World, c: Creature, idx: number): void {
     waterV = 0.12;
   }
 
+  // --- the shining stranger: the visitor, walking among them
+  let av: Creature | undefined;
+  let avNear = 0, avD = 1e9;
+  if (w.avatarId >= 0 && tier >= CLEVER) {
+    av = w.byId.get(w.avatarId);
+    if (av) {
+      avD = arc(av.x, av.y, av.z, c.x, c.y, c.z);
+      avNear = avD < range * 1.3 ? 1 - avD / (range * 1.3) : 0;
+      if (sp === KITH && !c.metAvatar && avD < 12) {
+        c.metAvatar = true;
+        c.suspect = Math.min(1, c.suspect + 0.05);
+        c.wonder = Math.min(1, c.wonder + 0.05);
+        log(w, c, "sawGlow", placeAt(t, c.x, c.y, c.z));
+        news(w, "firstSight", c.id, -1, placeAt(t, c.x, c.y, c.z), -1, "firstSight");
+        if (w.talkMode === "auto") {
+          // No words to decide with: its own boldness and chance settle how it takes the stranger.
+          const roll = w.rng.next();
+          c.stance = c.traits.bold > 0.66 ? (roll < 0.12 ? 3 : 1) : c.traits.bold < 0.3 ? 2 : roll < 0.6 ? 1 : roll < 0.85 ? 2 : roll < 0.95 ? 4 : 3;
+        } else w.sightings.push({ who: c.id, t: w.t });
+      }
+      // Wary of it: it unsettles like a threat, though less than a hunter does.
+      if (c.stance === 2 && avNear > 0 && avD * avD * 1.6 < threatD) {
+        threatD = avD * avD * 1.6;
+        tX = av.x;
+        tY = av.y;
+        tZ = av.z;
+      }
+    }
+  }
+
   // --- kin, threat, home, wander
   if (kinN > 0) aim(c, VEC.kin, kinX, kinY, kinZ);
   const fear = threatD < r2 ? Math.pow(1 - Math.sqrt(threatD) / range, 0.6) : 0;
@@ -982,6 +1027,23 @@ function sense(w: World, c: Creature, idx: number): void {
     followV = 0.2;
   }
 
+  // Drawn to the stranger, devoted to it, or set against it: all three close the distance.
+  if (av && avNear > 0 && (c.stance === 1 || c.stance === 3 || c.stance === 4)) {
+    const keep = c.stance === 1 ? 2.4 : 1.4;
+    aim(c, VEC.follow, av.x, av.y, av.z);
+    followV = avD < keep ? 0 : Math.max(followV, avNear);
+    if (avD < keep) tv[VEC.follow * 3] = tv[VEC.follow * 3 + 1] = tv[VEC.follow * 3 + 2] = 0;
+    if (c.stance === 3 && avD < 1.9 && w.rng.next() < 0.25) {
+      av.health -= 0.09;
+      if (!(c.flags & F_STRUCK)) {
+        c.flags |= F_STRUCK;
+        log(w, c, "struckGlow", placeAt(t, c.x, c.y, c.z));
+      }
+      ping(w, "strike", av.x, av.y, av.z, c.id);
+      if (av.health <= 0) die(w, av, "killed", c.id);
+    }
+  }
+
   // --- what it believes or remembers about places (clever kinds and folk)
   let dangerV = 0, goodV = 0;
   if (tier >= CLEVER && c.beliefs.length) {
@@ -1009,6 +1071,11 @@ function sense(w: World, c: Creature, idx: number): void {
   if (warmD < 20 && sp === KITH) aim(c, VEC.warm, warmX, warmY, warmZ);
   // --- something new the visitor put here
   let novelV = 0;
+  if (av && c.stance === 0 && avNear > 0 && avD > 2.5) {
+    // Not yet decided about the stranger: it is the newest thing there is.
+    novelV = avNear;
+    aim(c, VEC.novel, av.x, av.y, av.z);
+  }
   if (tier >= CLEVER) {
     for (const nv of w.novel) {
       const d = arc(nv.x, nv.y, nv.z, c.x, c.y, c.z);
@@ -1064,6 +1131,7 @@ function sense(w: World, c: Creature, idx: number): void {
     if (sp === KITH) {
       // What its mother can make, she has shown it by now.
       const m = w.byId.get(c.mother);
+      if (m) c.suspect = Math.max(c.suspect, m.suspect * 0.6);
       if (m) for (const h of m.beliefs) if (w.ideas[h.idea].kind === "craft" && w.rng.next() < 0.8 && hold(w, c, w.ideas[h.idea], 1, m.id)) log(w, c, "learned", here, m.id, h.idea);
     }
   }
@@ -1109,6 +1177,7 @@ function sense(w: World, c: Creature, idx: number): void {
   }
   if (here >= 0 && !(c.seen & (1 << here))) {
     c.seen |= 1 << here;
+    c.wonder = Math.min(1, c.wonder + 0.02);
     log(w, c, "reached", here);
   }
   if (kindHere === RIVER && !(c.flags & F_WADED) && !def.air && !def.sea) {
@@ -1225,6 +1294,9 @@ function sense(w: World, c: Creature, idx: number): void {
       log(w, c, "met", here, talk.id);
       log(w, talk, "met", here, c.id);
       news(w, "firstMeet", c.id, talk.id, here, -1, "firstMeet");
+      // What one suspects about the world, the other comes to share in part.
+      const [more, less] = c.suspect >= talk.suspect ? [c, talk] : [talk, c];
+      less.suspect += (more.suspect - less.suspect) * 0.25;
       if (c.bornLand !== talk.bornLand && c.root !== talk.root) {
         log(w, c, "stranger", here, talk.id);
         log(w, talk, "stranger", here, c.id);
@@ -1234,6 +1306,8 @@ function sense(w: World, c: Creature, idx: number): void {
       if (w.talkMode === "auto") settleMeeting(w, m);
       else w.meetings.push(m);
     }
+    if (c.suspect > 0.5) news(w, "suspects", c.id, -1, here, -1, "suspects50");
+    if (c.suspect > 0.9) news(w, "knows", c.id, -1, here, -1, "suspects90");
     // Beliefs fade unless life renews them. What it can make, it keeps.
     if (c.beliefs.length && w.rng.next() < dtT / DAY) {
       for (const h of c.beliefs) if (w.ideas[h.idea].kind !== "craft") h.s -= 0.03;
@@ -1260,9 +1334,9 @@ function kithActs(w: World, c: Creature, here: number, rain: number): void {
   if (c.tinkerCd > 0) c.tinkerCd -= DT * THINK_EVERY;
   // Trying things: turning over what it has handled until something comes of it.
   if (out[OUT.tinker] > 0.25 && c.tinkerCd <= 0 && c.state !== 3 && c.inp[IN.fear] < 0.2 && c.flags & F_GROWN) {
-    c.tinkerCd = DAY * w.rng.range(1.2, 2.4);
+    c.tinkerCd = DAY * w.rng.range(1.2, 2.4) * (1.3 - 0.6 * c.wonder);
     const options = craftOptions(c);
-    if (options.length && w.rng.next() < 0.07) {
+    if (options.length && w.rng.next() < 0.04 + 0.1 * c.wonder) {
       const a: Attempt = { id: w.tick * 1000 + (c.id % 1000), who: c.id, t: w.t, options };
       c.pause = 4;
       c.state = 9;
@@ -1275,9 +1349,16 @@ function kithActs(w: World, c: Creature, here: number, rain: number): void {
     // Pick up wood if a tree is within reach.
     for (const ti of st.trees[bucketOf(c.x, c.y, c.z)]) {
       const tr = t.trees[ti];
-      if (arc(tr.x, tr.y, tr.z, c.x, c.y, c.z) < 1.8) {
+      if (w.felled[ti] <= w.t && arc(tr.x, tr.y, tr.z, c.x, c.y, c.z) < 1.8) {
         c.carrying = 1;
         c.markCd = 3;
+        // Three loads of wood bring a tree down. It grows back in time.
+        if (++w.cuts[ti] >= 3) {
+          w.cuts[ti] = 0;
+          w.felled[ti] = w.t + DAY * 7;
+          log(w, c, "felled", here);
+          news(w, "firstFell", c.id, -1, here, -1, "firstFell");
+        }
         return;
       }
     }
@@ -1309,7 +1390,7 @@ function kithActs(w: World, c: Creature, here: number, rain: number): void {
   if (c.carrying && out[OUT.shelter] > 0.3) {
     let site = w.shelters.find((s) => arc(s.x, s.y, s.z, c.x, c.y, c.z) < 3);
     const nearHome = arc(c.homeX, c.homeY, c.homeZ, c.x, c.y, c.z) < 8;
-    if (!site && nearHome && w.shelters.length < 80 && dry && k !== MOUNTAIN && !w.shelters.some((s) => arc(s.x, s.y, s.z, c.x, c.y, c.z) < 7)) {
+    if (!site && nearHome && w.shelters.length < 160 && dry && k !== MOUNTAIN && !w.shelters.some((s) => arc(s.x, s.y, s.z, c.x, c.y, c.z) < 3.4)) {
       site = { x: c.x, y: c.y, z: c.z, wood: 0, done: false, life: DAY * 4, by: c.id, stone: (c.knows & (1 << C_STONEHUT)) !== 0 };
       w.shelters.push(site);
     }
@@ -1337,6 +1418,10 @@ function kithActs(w: World, c: Creature, here: number, rain: number): void {
 
 /** Moves, eats, drinks, rests and pays for it: every step. */
 function act(w: World, c: Creature): void {
+  if (c.avatar) {
+    moveAvatar(w, c);
+    return;
+  }
   const def = SPECIES[c.sp];
   const out = c.out;
   const tv = c.tv;
@@ -1513,6 +1598,90 @@ function act(w: World, c: Creature): void {
   if (c.health <= 0) die(w, c, c.energy <= 0.001 ? "hunger" : c.thirst >= 1 ? "thirst" : "cold");
 }
 
+/** The visitor's body: it goes where the visitor steers it. It needs nothing, and mends by itself. */
+function moveAvatar(w: World, c: Creature): void {
+  const k = w.ctl;
+  const t = w.terrain;
+  if (c.health < 1) c.health = Math.min(1, c.health + DT * 0.012);
+  let dx = k.x, dy = k.y, dz = k.z;
+  const d = dx * c.x + dy * c.y + dz * c.z;
+  dx -= d * c.x;
+  dy -= d * c.y;
+  dz -= d * c.z;
+  const mag = Math.hypot(dx, dy, dz);
+  c.state = 0;
+  if (mag < 0.01) {
+    c.pace = 0;
+    return;
+  }
+  const turn = Math.min(1, DT * 9);
+  let hx = c.hx + (dx / mag - c.hx) * turn, hy = c.hy + (dy / mag - c.hy) * turn, hz = c.hz + (dz / mag - c.hz) * turn;
+  const hd = hx * c.x + hy * c.y + hz * c.z;
+  hx -= hd * c.x;
+  hy -= hd * c.y;
+  hz -= hd * c.z;
+  const hl = Math.hypot(hx, hy, hz) || 1;
+  c.hx = hx /= hl;
+  c.hy = hy /= hl;
+  c.hz = hz /= hl;
+  const cell = cellOf(c.x, c.y, c.z);
+  const kind = t.kind[cell];
+  const wet = kind === SEA || kind === SHALLOW || kind === LAKE || kind === RIVER;
+  const v = (k.run ? 4.6 : 2.7) * (wet ? 0.55 : kind === MOUNTAIN ? 0.8 : 1);
+  const s = (v * DT) / R;
+  const nx = c.x + hx * s, ny = c.y + hy * s, nz = c.z + hz * s;
+  const nl = Math.hypot(nx, ny, nz);
+  c.x = nx / nl;
+  c.y = ny / nl;
+  c.z = nz / nl;
+  c.pace = k.run ? 1 : 0.6;
+  if (t.land[cell] >= 0) c.land = t.land[cell];
+  if (w.tick % 200 === 0) {
+    c.path.push(c.x, c.y, c.z);
+    if (c.path.length > 3 * 220) c.path.splice(3, 3);
+  }
+}
+
+/**
+ * The visitor takes a body of their own: one of the kith in shape, but shining,
+ * born of no one. Returns it, or null if there is no room.
+ */
+export function takeAvatar(w: World, x: number, y: number, z: number): Creature | null {
+  if (w.avatarId >= 0 || w.creatures.length >= MAX_CREATURES) return null;
+  const l = Math.hypot(x, y, z);
+  const c = blank(w, KITH, x / l, y / l, z / l, makeTraits(w.rng), founderBrain(KITH, w.rng));
+  c.avatar = true;
+  c.root = c.id;
+  c.energy = SPECIES[KITH].maxEnergy * 0.8;
+  c.flags |= F_GROWN;
+  c.mateCd = c.talkCd = 1e12;
+  c.knows = 1 << C_RAFT; // it can cross water
+  c.traits.hue = 0;
+  w.ledger.given += c.energy + SPECIES[KITH].mass * c.traits.size;
+  admit(w, c);
+  w.avatarId = c.id;
+  w.ctl = { x: 0, y: 0, z: 0, run: false, down: false };
+  news(w, "avatar", c.id, -1, nearestPlace(w.terrain, c.x, c.y, c.z), -1, "avatar");
+  return c;
+}
+
+/** The visitor leaves that body. It is gone from the world; those who saw it remember. */
+export function leaveAvatar(w: World): void {
+  const c = w.byId.get(w.avatarId);
+  w.avatarId = -1;
+  w.sightings = [];
+  if (!c) return;
+  w.ledger.lost += c.energy + SPECIES[KITH].mass * c.traits.size;
+  w.counts[KITH]--;
+  w.byId.delete(c.id);
+  w.gone.set(c.id, c);
+  c.alive = false;
+  c.died = w.t;
+  c.cause = "left";
+  const i = w.creatures.indexOf(c);
+  if (i >= 0) w.creatures.splice(i, 1);
+}
+
 /* ---------------- the step ---------------- */
 
 export function step(w: World): void {
@@ -1556,6 +1725,10 @@ export function step(w: World): void {
   // Meetings and makings nobody wrote words for settle themselves after a while.
   while (w.meetings.length && w.t - w.meetings[0].t > DAY * 0.3) settleMeeting(w, w.meetings.shift() as Meeting);
   while (w.attempts.length && w.t - w.attempts[0].t > DAY * 0.3) settleAttempt(w, w.attempts.shift() as Attempt);
+  while (w.sightings.length && w.t - w.sightings[0].t > DAY * 0.15) {
+    const c = w.byId.get((w.sightings.shift() as { who: number }).who);
+    if (c && c.stance === 0) c.stance = c.traits.bold > 0.5 ? 1 : 2;
+  }
 
   // Once a day: how each kind is doing.
   const day = dayOf(w.t);
