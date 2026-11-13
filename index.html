@@ -3,11 +3,88 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
-    <title>Eden</title>
-    <style>html,body{margin:0;height:100%;overflow:hidden;background:#f2eee5}canvas{width:100%;height:100%;display:block;touch-action:none}</style>
+    <title>Eden: a small world that learns to live</title>
+    <meta name="description" content="A small living island. Set creatures down and watch them learn to survive, each with its own tiny brain. The thinking ones tell you, in their own words, what they make of it." />
+    <meta name="theme-color" content="#f2eee5" />
+    <link rel="icon" href="./icon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="./src/styles.css" />
   </head>
-  <body>
-    <canvas id="stage"></canvas>
+  <body data-panel="">
+    <canvas id="stage" aria-label="The island. Drag to turn it, pinch or scroll to zoom, tap to set a creature down or to follow one."></canvas>
+
+    <header class="top">
+      <button class="wordmark" id="home" type="button" aria-label="Eden. Back to the whole island">Eden<i></i></button>
+      <p class="now" id="now" aria-live="off"></p>
+      <nav class="menu" aria-label="Views">
+        <button type="button" data-open="chronicle">Chronicle</button>
+        <button type="button" data-open="beliefs">Beliefs</button>
+        <button type="button" id="photo">Photo</button>
+        <button type="button" data-open="about">About</button>
+        <button class="icon-btn" id="mute" type="button" aria-pressed="false" aria-label="Mute sound">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+            <path d="M4 9.5v5h3.5L12 18.5v-13L7.5 9.5H4z" fill="currentColor" />
+            <path class="waves" d="M15.5 8.5a5 5 0 0 1 0 7M18 6a8.5 8.5 0 0 1 0 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+            <path class="cross" d="M16 9.5l5 5m0-5l-5 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+          </svg>
+        </button>
+      </nav>
+    </header>
+
+    <!-- First visit -->
+    <div class="intro" id="intro" hidden>
+      <p class="intro-line">A small world, alive on its own.</p>
+      <p class="intro-sub">Tap the land to set down one of the kith, and watch what it makes of things.</p>
+    </div>
+    <div class="ghost" id="ghost" hidden aria-hidden="true"><i></i><b></b></div>
+
+    <p class="toast" id="toast" hidden></p>
+    <div class="bubbles" id="bubbles" aria-live="polite"></div>
+    <p class="tag" id="tag" hidden></p>
+
+    <!-- The dock -->
+    <footer class="dock" id="dock">
+      <div class="group" role="group" aria-label="Set down a creature">
+        <p class="label">Set down</p>
+        <div class="row" id="kinds"></div>
+      </div>
+      <div class="group" role="group" aria-label="Shape the world">
+        <p class="label">Shape</p>
+        <div class="row">
+          <button type="button" class="tool" id="rain">Rain</button>
+          <button type="button" class="tool" id="drought">Drought</button>
+          <button type="button" class="tool" id="cold">Cold</button>
+          <button type="button" class="tool" id="food" aria-pressed="false">Food</button>
+        </div>
+      </div>
+      <div class="group" role="group" aria-label="Time">
+        <p class="label">Time</p>
+        <div class="row" id="speeds">
+          <button type="button" class="tool" data-speed="0" aria-pressed="false" aria-label="Pause">
+            <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M8 5v14M16 5v14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" /></svg>
+          </button>
+          <button type="button" class="tool" data-speed="1" aria-pressed="true">1×</button>
+          <button type="button" class="tool" data-speed="8" aria-pressed="false">8×</button>
+          <button type="button" class="tool" data-speed="32" aria-pressed="false">32×</button>
+        </div>
+      </div>
+    </footer>
+
+    <!-- The side panel: a creature, the chronicle, the beliefs, or about -->
+    <aside class="panel" id="panel" hidden>
+      <button class="icon-btn panel-close" id="panel-close" type="button" aria-label="Close">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" /></svg>
+      </button>
+      <div class="panel-body" id="panel-body" tabindex="-1"></div>
+    </aside>
+
+    <!-- Photo mode -->
+    <div class="photo-bar" id="photo-bar" hidden>
+      <button type="button" class="btn" id="photo-save">Save still</button>
+      <button type="button" class="link" id="photo-done">Done</button>
+    </div>
+
+    <p class="spend" id="spend" hidden></p>
+
     <script type="module" src="./src/main.ts"></script>
   </body>
 </html>

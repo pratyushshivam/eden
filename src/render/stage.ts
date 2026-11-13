@@ -69,6 +69,8 @@ export class Stage {
   private conifer: THREE.InstancedMesh | null = null;
   private berries: THREE.InstancedMesh | null = null;
   private tufts: THREE.InstancedMesh | null = null;
+  private broadAt: { x: number; y: number; m: THREE.Matrix4; down: boolean }[] = [];
+  private coniferAt: { x: number; y: number; m: THREE.Matrix4; down: boolean }[] = [];
   private tuftCell: Int32Array = new Int32Array(0);
   private tuftBase: Float32Array = new Float32Array(0);
   private clouds: THREE.InstancedMesh;
@@ -144,16 +146,21 @@ export class Stage {
 
     // Clouds overhead.
     const puff = join([
-      part(ball(1), 0xffffff, { s: [5, 2.4, 3.4] }),
-      part(ball(1), 0xffffff, { p: [3.6, 0.5, 0.8], s: [3.4, 2, 2.8] }),
-      part(ball(1), 0xffffff, { p: [-3.8, 0.2, -0.4], s: [3.2, 1.7, 2.6] }),
-      part(ball(1), 0xffffff, { p: [0.6, 1.5, -0.4], s: [3, 1.9, 2.4] }),
+      part(ball(3), 0xffffff, { s: [6, 1.5, 3.6] }),
+      part(ball(3), 0xffffff, { p: [4.2, 0.5, 0.8], s: [3.6, 1.5, 2.8] }),
+      part(ball(3), 0xffffff, { p: [-4.4, 0.3, -0.4], s: [3.6, 1.3, 2.6] }),
+      part(ball(3), 0xffffff, { p: [0.8, 1.0, -0.6], s: [3.4, 1.6, 2.6] }),
+      part(ball(3), 0xffffff, { p: [-1.8, 0.8, 1.2], s: [2.8, 1.3, 2.2] }),
+      part(ball(3), 0xffffff, { p: [7.2, 0.1, -0.5], s: [2.4, 0.9, 1.8] }),
+      part(ball(3), 0xffffff, { p: [-7.4, 0, 0.6], s: [2.2, 0.8, 1.7] }),
     ]);
-    this.clouds = new THREE.InstancedMesh(puff, new THREE.MeshStandardMaterial({ flatShading: true, roughness: 1, vertexColors: true, transparent: true, opacity: 0.96 }), 18);
+    this.clouds = new THREE.InstancedMesh(puff, new THREE.MeshLambertMaterial({ vertexColors: true, transparent: true, opacity: 0.7, depthWrite: false }), 18);
     this.clouds.castShadow = true;
     this.clouds.frustumCulled = false;
     for (let i = 0; i < 18; i++) {
-      this.cloudAt.push({ x: (hash1(i) * 2 - 1) * 95, z: (hash1(i + 50) * 2 - 1) * 80, y: 25 + hash1(i + 9) * 9, s: 0.7 + hash1(i + 3) * 0.9, storm: i >= 7 });
+      // Fair-weather clouds keep to the edges of the view; storm clouds come in overhead.
+      const far = i < 6;
+      this.cloudAt.push({ x: (hash1(i) * 2 - 1) * 110, z: far ? (i % 2 ? 1 : -1) * (62 + hash1(i + 50) * 40) : (hash1(i + 50) * 2 - 1) * 70, y: 30 + hash1(i + 9) * 14, s: 0.7 + hash1(i + 3) * 0.8, storm: !far });
     }
     this.scene.add(this.clouds);
 
@@ -446,14 +453,18 @@ export class Stage {
     };
     const trunks = new THREE.InstancedMesh(trunkGeo, std(), broad.length);
     this.canopy = new THREE.InstancedMesh(canopyGeo, std(), broad.length);
+    this.broadAt = broad.map((tr) => ({ x: tr.x, y: tr.y, m: new THREE.Matrix4(), down: false }));
+    this.coniferAt = conif.map((tr) => ({ x: tr.x, y: tr.y, m: new THREE.Matrix4(), down: false }));
     broad.forEach((tr, i) => {
-      put(trunks, i, tr.x, tr.y, tr.s, tr.s * (0.9 + hash1(i) * 0.3));
+      put(trunks, i, tr.x, tr.y, tr.s * 0.82, tr.s * 0.82 * (0.9 + hash1(i) * 0.3));
       this.canopy?.setMatrixAt(i, tmpM);
+      this.broadAt[i].m.copy(tmpM);
       this.canopy?.setColorAt(i, tmpC.set(0x5f9a3e));
     });
     this.conifer = new THREE.InstancedMesh(coniferGeo, std(), conif.length);
     conif.forEach((tr, i) => {
-      put(this.conifer as THREE.InstancedMesh, i, tr.x, tr.y, tr.s, tr.s * (0.95 + hash1(i + 3) * 0.4));
+      put(this.conifer as THREE.InstancedMesh, i, tr.x, tr.y, tr.s * 0.82, tr.s * 0.82 * (0.95 + hash1(i + 3) * 0.4));
+      this.coniferAt[i].m.copy(tmpM);
       this.conifer?.setColorAt(i, tmpC.set(0x3f7a48));
     });
     const bushGeo = join([
@@ -603,7 +614,7 @@ export class Stage {
     const dusk = Math.max(0, 1 - Math.abs(s) / 0.42);
     L.day = day;
     L.zenith.set(0x0a1026).lerp(C(0x3a82d6), day).lerp(C(0x4d5f96), dusk * 0.45);
-    L.horizon.set(0x1a2444).lerp(C(0xc3ddef), day).lerp(C(0xf5a55e), dusk * 0.8);
+    L.horizon.set(0x1a2444).lerp(C(0xc3ddef), day).lerp(C(0xf5ad6e), dusk * 0.62);
     const grey = C(0x8794a3).multiplyScalar(0.35 + 0.65 * day);
     L.zenith.lerp(grey, w.rain * 0.75);
     L.horizon.lerp(grey.multiplyScalar(1.12), w.rain * 0.7);
@@ -642,10 +653,10 @@ export class Stage {
     const sunPower = smooth(-0.06, 0.3, w.sun) * 3.1 * (1 - w.rain * 0.55);
     if (up) this.sun.color.copy(L.sun);
     else this.sun.color.set(0x8fa6ee);
-    this.sun.intensity = up ? Math.max(sunPower, 0.02) : 0.55 * w.night * (1 - w.rain * 0.5);
+    this.sun.intensity = up ? Math.max(sunPower, 0.02) : 0.95 * w.night * (1 - w.rain * 0.5);
     this.hemi.color.copy(L.horizon).lerp(L.zenith, 0.4);
     this.hemi.groundColor.set(0x6d6046).lerp(C(0x20263a), w.night);
-    this.hemi.intensity = 0.42 + 0.95 * L.day;
+    this.hemi.intensity = 0.62 + 0.8 * L.day;
     const fog = this.scene.fog as THREE.Fog;
     fog.color.copy(L.horizon).lerp(L.below, 0.3);
     fog.near = 200 - w.rain * 110;
@@ -726,6 +737,7 @@ export class Stage {
         this.cam.follow(p.x, p.y, p.z);
       }
     } else this.ring.visible = false;
+    this.partTrees(sel && sel.sp !== 2 && this.cam.dist < 60 ? sel.x : -99, sel ? sel.y : -99);
 
     this.cam.update(dt, (x, z) => (Math.hypot(x, z) < RIM ? Math.max(0, heightAt(t, x + H, z + H)) : 0));
 
@@ -738,6 +750,28 @@ export class Stage {
       this.resize();
     }
     this.renderer.render(this.scene, this.camera);
+  }
+
+  /** The trees right over the followed creature shrink out of the way, and grow back when it moves on. */
+  private partTrees(x: number, y: number): void {
+    const flat = new THREE.Matrix4();
+    for (const [list, mesh] of [[this.broadAt, this.canopy], [this.coniferAt, this.conifer]] as const) {
+      if (!mesh) continue;
+      let changed = false;
+      for (let i = 0; i < list.length; i++) {
+        const tr = list[i];
+        const near = (tr.x - x) ** 2 + (tr.y - y) ** 2 < 7;
+        if (near === tr.down) continue;
+        tr.down = near;
+        changed = true;
+        if (near) {
+          tr.m.decompose(tmpP, tmpQ, tmpS);
+          flat.compose(tmpP, tmpQ, tmpS.multiplyScalar(0.001));
+          mesh.setMatrixAt(i, flat);
+        } else mesh.setMatrixAt(i, tr.m);
+      }
+      if (changed) mesh.instanceMatrix.needsUpdate = true;
+    }
   }
 
   private weatherFx(w: World, dt: number): void {

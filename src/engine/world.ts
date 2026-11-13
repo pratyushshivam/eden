@@ -147,7 +147,7 @@ function blank(w: World, sp: Species, x: number, y: number, traits: Traits, brai
     homeX: x, homeY: y, waterX: -1, waterY: -1, callX: -1, callY: -1, wander: a,
     state: 0, foodKind: 0, foodAt: -1,
     mateCd: 0, talkCd: 0, markCd: 0, pause: 0, detour: 0, carrying: 0, follow: -1, avoid: -1,
-    flags: 0, seen: 0, name: null, log: [], beliefs: [], thoughts: [],
+    flags: 0, seen: 0, at: new Uint16Array(16), samples: 0, name: null, log: [], beliefs: [], thoughts: [],
     alive: true, died: 0, cause: "", kills: 0,
   };
 }
@@ -324,7 +324,7 @@ export function findIdea(w: World, kind: Idea["kind"], place: number, who: numbe
 export function makeIdea(w: World, kind: Idea["kind"], place: number, who: number, origin: number, text = "", from = -1): Idea {
   const found = findIdea(w, kind, place, who, text);
   if (found) return found;
-  const idea: Idea = { id: w.ideas.length, kind, place, who, text, origin, t: w.t, from, edges: [], inB: 0, totB: 0, inO: 0, totO: 0 };
+  const idea: Idea = { id: w.ideas.length, kind, place, who, text, origin, t: w.t, from, edges: [], beforeIn: 0, beforeTot: 0, afterIn: 0, afterTot: 0 };
   w.ideas.push(idea);
   return idea;
 }
@@ -342,6 +342,10 @@ export function hold(w: World, c: Creature, idea: Idea, strength: number, from: 
     c.beliefs = c.beliefs.filter((b) => !(w.ideas[b.idea].kind === other && w.ideas[b.idea].place === idea.place));
   }
   c.beliefs.push({ idea: idea.id, s: Math.min(1, strength), from, t: w.t });
+  if (idea.place >= 0) {
+    idea.beforeIn += c.at[idea.place];
+    idea.beforeTot += c.samples;
+  }
   if (c.beliefs.length > 8) {
     c.beliefs.sort((a, b) => b.s - a.s);
     c.beliefs.length = 8;
@@ -502,6 +506,11 @@ function birth(w: World, m: Creature, f: Creature): void {
   if (c.gen === 3 || c.gen === 6 || c.gen === 10 || c.gen === 15) news(w, "generation", c.id, -1, p, c.gen, `gen${m.sp}-${c.gen}`);
 }
 
+/** Parent and child, or children of the same mother: these do not pair. */
+function closeKin(a: Creature, b: Creature): boolean {
+  return a.mother === b.id || a.father === b.id || b.mother === a.id || b.father === a.id || (a.mother >= 0 && a.mother === b.mother);
+}
+
 /** Looks around, fills the senses, runs the network, and does the once-in-a-while things. */
 function sense(w: World, c: Creature, idx: number): void {
   const t = w.terrain;
@@ -540,7 +549,7 @@ function sense(w: World, c: Creature, idx: number): void {
           kinY += dy;
           kinN++;
           if (d2 < kinD) kinD = d2;
-          if (adult && o.sex !== c.sex && d2 < mateD && (o.flags & F_GROWN) !== 0) {
+          if (adult && o.sex !== c.sex && d2 < mateD && (o.flags & F_GROWN) !== 0 && !closeKin(c, o)) {
             mateD = d2;
             mateC = o;
           }
@@ -946,19 +955,15 @@ function sense(w: World, c: Creature, idx: number): void {
       for (const h of c.beliefs) h.s -= 0.03;
       c.beliefs = c.beliefs.filter((h) => h.s > 0.12);
     }
-    // Sample: are believers found at the places their beliefs are about?
+    // Sample where it is, so a belief's effect can be measured: before it was held, and since.
     if ((w.tick / THINK_EVERY) % 5 < 1) {
-      for (const idea of w.ideas) {
+      c.samples++;
+      if (here >= 0) c.at[here]++;
+      for (const h of c.beliefs) {
+        const idea = w.ideas[h.idea];
         if (idea.place < 0) continue;
-        const p = t.places[idea.place];
-        const inside = (p.x - c.x) ** 2 + (p.y - c.y) ** 2 < p.r * p.r ? 1 : 0;
-        if (c.beliefs.some((h) => h.idea === idea.id)) {
-          idea.inB += inside;
-          idea.totB++;
-        } else {
-          idea.inO += inside;
-          idea.totO++;
-        }
+        idea.afterTot++;
+        if (here === idea.place) idea.afterIn++;
       }
     }
   }

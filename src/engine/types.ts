@@ -46,11 +46,11 @@ export interface Idea {
   from: number;
   /** Every passing-on: who told whom, when. */
   edges: { a: number; b: number; t: number }[];
-  /** How often believers and the rest were found at the place (sampled). */
-  inB: number;
-  totB: number;
-  inO: number;
-  totO: number;
+  /** How often its holders were found at the place before they held it, and since (sampled). */
+  beforeIn: number;
+  beforeTot: number;
+  afterIn: number;
+  afterTot: number;
 }
 
 export interface Thought {
@@ -130,6 +130,9 @@ export interface Creature {
   flags: number;
   /** Bit per place visited. */
   seen: number;
+  /** How many times it was found at each place, out of `samples`. */
+  at: Uint16Array;
+  samples: number;
   name: string | null;
   log: LogEntry[];
   beliefs: Held[];

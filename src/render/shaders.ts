@@ -78,7 +78,7 @@ void main(){
   float n2 = fbm(q * 1.9 - drift * 1.4 + 4.0);
   float e = 0.35;
   vec2 g = vec2(fbm(q + drift + vec2(e, 0.0)) - n1, fbm(q + drift + vec2(0.0, e)) - n1) + 0.6 * vec2(fbm(q * 1.9 - drift * 1.4 + 4.0 + vec2(e, 0.0)) - n2, fbm(q * 1.9 - drift * 1.4 + 4.0 + vec2(0.0, e)) - n2);
-  vec3 n = normalize(vec3(-g.x * 1.6, 1.0, -g.y * 1.6));
+  vec3 n = normalize(vec3(-g.x * 1.1, 1.0, -g.y * 1.1));
   vec3 v = normalize(cameraPosition - vWorld);
   float fres = pow(1.0 - max(dot(n, v), 0.0), 3.0);
   float deepness = smoothstep(0.0, 2.6, depth);
@@ -91,7 +91,7 @@ void main(){
   // Foam where the water meets the land.
   float lap = sin(depth * 16.0 - t * 2.2 + n1 * 6.0) * 0.5 + 0.5;
   float foam = smoothstep(0.34, 0.0, depth) * (0.45 + 0.55 * lap) + smoothstep(0.1, 0.0, depth);
-  foam += smoothstep(0.62, 0.72, n1 * n2 * 2.4) * 0.25 * (1.0 - uFlow);
+  foam += smoothstep(0.7, 0.8, n1 * n2 * 2.4) * 0.12 * (1.0 - uFlow);
   // And where the sea pours off the rim of the world.
   float rim = uEdge > 0.0 ? smoothstep(uEdge - 2.2, uEdge - 0.2, length(p)) : 0.0;
   foam += rim * (0.5 + 0.5 * vnoise(p * 1.4 + vec2(0.0, t * 1.5)));

@@ -5,21 +5,21 @@
 import * as THREE from "three";
 
 export class OrbitCam {
-  readonly target = new THREE.Vector3(0, 2, 0);
+  readonly target = new THREE.Vector3(0, -4, 0);
   /** Turn around the island, tilt from straight down, and distance. */
   az = 0.6;
   tilt = 1.02;
-  dist = 150;
+  dist = 162;
   /** Slow turning while nobody is touching. */
   drift = true;
   onTap: (x: number, y: number) => void = () => {};
   /** Called when the visitor moves the view by hand. */
   onMove: (panned: boolean) => void = () => {};
 
-  private goal = new THREE.Vector3(0, 2, 0);
+  private goal = new THREE.Vector3(0, -4, 0);
   private gAz = 0.6;
   private gTilt = 1.02;
-  private gDist = 150;
+  private gDist = 162;
   private following = false;
   private pointers = new Map<number, { x: number; y: number }>();
   private down = { x: 0, y: 0, t: 0, moved: false, button: 0, shift: false };
@@ -113,8 +113,8 @@ export class OrbitCam {
 
   /** Back to the whole island. */
   home(): void {
-    this.goal.set(0, 2, 0);
-    this.gDist = 150;
+    this.goal.set(0, -4, 0);
+    this.gDist = 162;
     this.gTilt = 1.02;
     this.following = false;
   }
@@ -126,7 +126,9 @@ export class OrbitCam {
   update(dt: number, groundAt: (x: number, z: number) => number): void {
     if (this.drift) this.gAz += dt * 0.035;
     const k = Math.min(1, dt * 6);
-    if (!this.following) this.goal.y += (groundAt(this.goal.x, this.goal.z) + 1 - this.goal.y) * k;
+    // From far off, look a little below the land so the island sits above the controls.
+    const sink = Math.min(1, Math.max(0, (this.gDist - 60) / 100)) * 8;
+    if (!this.following) this.goal.y += (groundAt(this.goal.x, this.goal.z) + 1 - sink - this.goal.y) * k;
     this.target.lerp(this.goal, Math.min(1, dt * (this.following ? 4 : 7)));
     this.az += (this.gAz - this.az) * k;
     this.tilt += (this.gTilt - this.tilt) * k;

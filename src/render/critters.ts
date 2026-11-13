@@ -169,7 +169,7 @@ export class Critters {
     const counts = [0, 0, 0, 0];
     let woods = 0, talks = 0;
     // From far away, draw them a little larger than life so they can still be seen.
-    const big = Math.min(2.5, Math.max(1.15, camDist / 52));
+    const big = Math.min(2.2, Math.max(1.25, camDist / 56));
     const ease = Math.min(1, dt * 10);
     for (const c of w.creatures) {
       const def = SPECIES[c.sp];
