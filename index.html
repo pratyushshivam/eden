@@ -2,12 +2,99 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Eden</title>
-    <style>html,body{margin:0;height:100%;overflow:hidden;background:#03040a}canvas{width:100%;height:100%;display:block;touch-action:none}</style>
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+    <title>Eden: a small planet where every creature thinks for itself</title>
+    <meta name="description" content="A whole small planet. Set creatures down anywhere and watch them learn to survive, each with its own neural network. The thinking ones talk, believe, invent, and wonder about you." />
+    <meta name="theme-color" content="#03040a" />
+    <link rel="icon" href="./icon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="./src/styles.css" />
   </head>
-  <body>
-    <canvas id="stage"></canvas>
+  <body data-panel="">
+    <canvas id="stage" aria-label="The planet. Drag to spin it, pinch or scroll to zoom from orbit down to the ground, tap to set a creature down or to follow one."></canvas>
+
+    <header class="top">
+      <button class="wordmark" id="home" type="button" aria-label="Eden. Back out to the whole planet">Eden<i></i></button>
+      <p class="now" id="now" aria-live="off"></p>
+      <nav class="menu" aria-label="Views">
+        <button type="button" data-open="chronicle">Chronicle</button>
+        <button type="button" data-open="beliefs">Beliefs</button>
+        <button type="button" data-open="minds">Minds</button>
+        <button type="button" id="photo">Photo</button>
+        <button type="button" data-open="about">About</button>
+        <button class="icon-btn" id="mute" type="button" aria-pressed="false" aria-label="Mute sound">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+            <path d="M4 9.5v5h3.5L12 18.5v-13L7.5 9.5H4z" fill="currentColor" />
+            <path class="waves" d="M15.5 8.5a5 5 0 0 1 0 7M18 6a8.5 8.5 0 0 1 0 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+            <path class="cross" d="M16 9.5l5 5m0-5l-5 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+          </svg>
+        </button>
+      </nav>
+    </header>
+
+    <!-- The guided first minute -->
+    <div class="intro" id="intro" hidden>
+      <p class="intro-line" id="intro-line"></p>
+      <p class="intro-sub" id="intro-sub"></p>
+      <button class="link intro-skip" id="intro-skip" type="button">Skip</button>
+    </div>
+
+    <!-- What is going on right now, anywhere on the planet -->
+    <aside class="happening" id="happening" aria-label="Happening now"></aside>
+    <div class="pings" id="pings" aria-hidden="true"></div>
+
+    <p class="toast" id="toast" hidden></p>
+    <div class="bubbles" id="bubbles" aria-live="polite"></div>
+    <p class="tag" id="tag" hidden></p>
+
+    <!-- Choosing what to set down -->
+    <div class="picker" id="picker" hidden role="dialog" aria-label="Choose what to set down"></div>
+
+    <!-- The dock -->
+    <footer class="dock" id="dock">
+      <div class="group" role="group" aria-label="Set down a creature">
+        <p class="label">Set down</p>
+        <div class="row">
+          <button type="button" class="tool pick" id="pick" aria-haspopup="dialog" aria-expanded="false"></button>
+        </div>
+      </div>
+      <div class="group" role="group" aria-label="Shape the world">
+        <p class="label">Shape, then tap the place</p>
+        <div class="row" id="tools">
+          <button type="button" class="tool" data-tool="rain" aria-pressed="false">Rain</button>
+          <button type="button" class="tool" data-tool="drought" aria-pressed="false">Drought</button>
+          <button type="button" class="tool" data-tool="cold" aria-pressed="false">Cold</button>
+          <button type="button" class="tool" data-tool="food" aria-pressed="false">Food</button>
+        </div>
+      </div>
+      <div class="group" role="group" aria-label="Time">
+        <p class="label">Time</p>
+        <div class="row" id="speeds">
+          <button type="button" class="tool" data-speed="0" aria-pressed="false" aria-label="Pause">
+            <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M8 5v14M16 5v14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" /></svg>
+          </button>
+          <button type="button" class="tool" data-speed="1" aria-pressed="true">1×</button>
+          <button type="button" class="tool" data-speed="8" aria-pressed="false">8×</button>
+          <button type="button" class="tool" data-speed="32" aria-pressed="false">32×</button>
+        </div>
+      </div>
+    </footer>
+
+    <!-- The side panel: a creature, the chronicle, the beliefs, the minds, or about -->
+    <aside class="panel" id="panel" hidden>
+      <button class="icon-btn panel-close" id="panel-close" type="button" aria-label="Close">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" /></svg>
+      </button>
+      <div class="panel-body" id="panel-body" tabindex="-1"></div>
+    </aside>
+
+    <!-- Photo mode -->
+    <div class="photo-bar" id="photo-bar" hidden>
+      <button type="button" class="btn" id="photo-save">Save still</button>
+      <button type="button" class="link" id="photo-done">Done</button>
+    </div>
+
+    <p class="spend" id="spend" hidden></p>
+
     <script type="module" src="./src/main.ts"></script>
   </body>
 </html>

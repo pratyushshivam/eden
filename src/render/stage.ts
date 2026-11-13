@@ -347,12 +347,19 @@ export class Stage {
       mesh.frustumCulled = false;
       this.flora.add(mesh);
     }
-    // Start over the day side, a little towards the evening edge where the light is low and long.
+    // Start over the day side, a little off to one side where the light is low and long.
     const sx = w.sunX * Math.cos(0.75) - w.sunZ * Math.sin(0.75), sz = w.sunX * Math.sin(0.75) + w.sunZ * Math.cos(0.75);
     this.cam.jump(sx, 0.32, sz);
     this.slower = 0;
     this.tuftAt.set(9, 9, 9);
     this.critters.reset();
+  }
+
+  /** Pull back to the whole planet, over the side the sun is on. */
+  home(w: World): void {
+    const sx = w.sunX * Math.cos(0.6) - w.sunZ * Math.sin(0.6), sz = w.sunX * Math.sin(0.6) + w.sunZ * Math.cos(0.6);
+    this.cam.home();
+    this.cam.flyTo(sx, 0.3, sz, 290);
   }
 
   /* ---------------- things that change slowly ---------------- */

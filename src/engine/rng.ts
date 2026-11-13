@@ -10,6 +10,16 @@ export class Rng {
     this.state = seed >>> 0 || 0x9e3779b9;
   }
 
+  /** The generator's whole state, for saving a world and carrying on later. */
+  save(): [number, number | null] {
+    return [this.state, this.spare];
+  }
+
+  restore(s: [number, number | null]): void {
+    this.state = s[0];
+    this.spare = s[1];
+  }
+
   /** Uniform in [0, 1). */
   next(): number {
     let t = (this.state = (this.state + 0x6d2b79f5) >>> 0);

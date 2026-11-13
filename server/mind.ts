@@ -22,7 +22,7 @@ const PRICE = { inMiss: 0.3, inHit: 0.006, out: 1.2 };
 /** The most this route will ever spend in total, whatever the environment says. */
 const HARD_TOTAL = 0.5;
 const MAX_BODY = 9000;
-const MAX_OUT = { voice: 240, talk: 340 };
+const MAX_OUT = { voice: 240, talk: 340, make: 170 };
 const MAX_AT_ONCE = 2;
 const MIN_GAP_MS = 1200;
 const MAX_PER_MINUTE = 24;
@@ -85,13 +85,15 @@ export function spendReport(env: MindEnv): Spend {
   return { session, total, sessionLimit, totalLimit, calls: sessionCalls, state };
 }
 
-const SYSTEM = `You give words to the kith: small upright folk on a little island. They have no borrowed knowledge. No science, no taught religion, no writing, no counting past a handful, no word for anything they have not met. They work the world out from what has happened to them, and they are often wrong in interesting ways. They wonder what the bright thing in the sky is, why the cold comes, where the dead go, who they are among their kin.
+const SYSTEM = `You give words to the kith: small upright folk on a small world of lands and seas. They have no borrowed knowledge. No science, no taught religion, no writing, no counting past a handful, no word for anything they have not met. They work the world out from what has happened to them, and they are often wrong in interesting ways. They wonder what the bright thing in the sky is, why the cold comes, where the dead go, who they are among their kin.
 
 Rules:
 - Use only the facts given. Never invent an event, a death, a place or a relative that is not in the facts.
 - Plain, concrete, short sentences. The voice of a being thinking aloud, not a poet and not a narrator.
 - Their own words for things: the sun is "the bright one" or a name they coin; a russet is a red hunter; dapples are the round grazers; skims are the white fliers.
-- Never mention anything modern, any technology, games, simulations, a maker or a watcher, numbers of days, or the words "island", "creature", "species", "kith" as a label for themselves (they say "we" or "my kind").
+- Never mention anything modern, any technology, games, simulations, numbers of days, or the words "planet", "creature", "species", "kith" as a label for themselves (they say "we" or "my kind").
+- Some things in their lives come out of the sky with no cause they can see: their own first ones, food, a beast, sudden rain or cold. They do not know what does this. Each may wonder about it in its own way, and different ones may reach different answers. Do not hand them a ready-made god, and do not explain it to them.
+- Each one has its own voice. Let its traits, its losses and what it has made decide how it sounds. Two of them should never sound the same.
 - Names they coin are short and soft, one or two syllables (like Aru, Min, Tolo, Shai). Never a famous name.
 - Reply with one JSON object and nothing else.`;
 
@@ -100,7 +102,7 @@ function clip(v: unknown, n: number): string {
 }
 
 /** Builds the user message from the facts sent by the page. Everything is clipped. */
-function buildPrompt(kind: "voice" | "talk", facts: Record<string, unknown>): string {
+function buildPrompt(kind: "voice" | "talk" | "make", facts: Record<string, unknown>): string {
   const safe = JSON.stringify(facts, (_k, v) => (typeof v === "string" ? clip(v, 220) : v)).slice(0, 5200);
   if (kind === "voice") {
     return `Here is one of them, and everything that has really happened to it.
@@ -112,6 +114,16 @@ Write what it is thinking now. JSON keys:
 "name": ONLY if "name" above is null: the name it has come to call itself. Otherwise omit.
 "place_names": optional, at most one item {"id": <id from places>, "name": "<a short name it coins>"} for a place above whose name is null and which matters in its life. Omit if none.
 "saying": optional. One short general belief it has arrived at about the world (the bright one, the cold, the water, the dead, the red hunters), at most fourteen words, the kind of thing that could be repeated to others. Omit unless its life supports one.`;
+  }
+  if (kind === "make") {
+    return `One of them has been turning things over in its hands. Here is its life, what it has handled ("in_hands"), and what could really come of those things ("could_make").
+
+${safe}
+
+Decide what THIS one makes now, out of what its own life has made it need. It may be any one of "could_make". JSON keys:
+"make": the ref of the one it makes.
+"name": the short word its people will use for the thing from now on. One or two syllables, coined, lower case, not a word from any real language.
+"how": one or two sentences, first person, on how it came about: what it was doing, what it noticed, what the thing is for.`;
   }
   return `Two of them have met. Here is each one, what has really happened to it, and what each could tell the other ("can_tell": things it believes that the other does not).
 
@@ -137,7 +149,7 @@ export async function handleMind(body: unknown, env: MindEnv): Promise<MindReply
   const refuse = (reason: string, status = 200): MindReply => ({ status, json: { ok: false, reason, spend: spendReport(env) } });
   if (!body || typeof body !== "object") return refuse("bad_request", 400);
   const b = body as { kind?: unknown; facts?: unknown };
-  if (b.kind !== "voice" && b.kind !== "talk") return refuse("bad_request", 400);
+  if (b.kind !== "voice" && b.kind !== "talk" && b.kind !== "make") return refuse("bad_request", 400);
   if (!b.facts || typeof b.facts !== "object" || JSON.stringify(b.facts).length > MAX_BODY) return refuse("bad_request", 400);
   if (!env.apiKey) return refuse("no_key");
   if (rejected) return refuse("rejected");

@@ -287,12 +287,18 @@ export function makeTerrain(seed: number): Terrain {
   }
   const bySize = [...lands].sort((a, b) => b.cells - a.cells);
   const band = (y: number): string => (y > 0.55 ? "far northern" : y > 0.2 ? "northern" : y < -0.55 ? "far southern" : y < -0.2 ? "southern" : "middle");
+  // Plain descriptions: the big lands by rank, the islands by where they lie.
   const usedDesc = new Set<string>();
-  const nth = ["", "", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth"];
+  const nth = ["", "great", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth"];
   bySize.forEach((l, rank) => {
-    const size = l.cells > 2600 ? "continent" : l.cells > 900 ? "wide land" : l.cells > 220 ? "island" : l.cells > 40 ? "small island" : "islet";
-    let d = rank === 0 ? "the great land" : `the ${band(l.y)} ${size}`;
-    for (let n = 2; usedDesc.has(d); n++) d = `the ${nth[Math.min(n, 8)]} ${band(l.y)} ${size}${n > 8 ? ` ${n}` : ""}`;
+    let d: string;
+    if (rank === 0) d = "the great land";
+    else if (l.cells > 700 && rank < 10) d = `the ${nth[rank + 1]} land`;
+    else {
+      const size = l.cells > 220 ? "island" : l.cells > 40 ? "small island" : "islet";
+      d = `the ${band(l.y)} ${size}`;
+      for (let n = 2; usedDesc.has(d); n++) d = `the ${band(l.y)} ${size} (${n})`;
+    }
     usedDesc.add(d);
     l.desc = d;
   });

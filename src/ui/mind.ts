@@ -5,8 +5,8 @@
  * here falls back to the plain built-in voice and the world carries on.
  */
 import {
-  DAY, KITH, SPECIES, applyMeeting, applyVoice, coinName, giveName, kithFacts, nowFacts, plainMeeting, plainVoice, tellables,
-  type Creature, type Meeting, type Talk, type TalkResult, type VoiceResult, type World,
+  DAY, KITH, SPECIES, applyAttempt, applyMeeting, applyVoice, attemptFacts, coinName, giveName, kithFacts, nowFacts, plainMeeting, plainVoice, tellables,
+  type Attempt, type AttemptResult, type Creature, type Idea, type Meeting, type Talk, type TalkResult, type VoiceResult, type World,
 } from "../engine";
 
 export interface Spend {
@@ -19,9 +19,10 @@ export interface Spend {
 }
 
 interface Job {
-  kind: "voice" | "talk";
+  kind: "voice" | "talk" | "make";
   id: number;
   meeting?: Meeting;
+  attempt?: Attempt;
   /** Higher goes first. */
   pri: number;
 }
@@ -42,6 +43,8 @@ export class Mind {
   /** Creature ids with a request in flight or queued. */
   readonly waiting = new Set<number>();
   onTalk: (t: Talk) => void = () => {};
+  /** Called when a kith makes something for the first time. */
+  onMade: (who: number, idea: Idea) => void = () => {};
   onChange: () => void = () => {};
 
   private queue: Job[] = [];
@@ -49,6 +52,7 @@ export class Mind {
   private lastCall = 0;
   private lastAuto = 0;
   private lastTalk = 0;
+  private lastMake = 0;
   private asked = new Map<number, number>();
   private unnamedSince = new Map<number, number>();
   private tick = 0;
@@ -120,6 +124,17 @@ export class Mind {
         if (t && t.ideas.length) this.onTalk(t);
       }
     }
+    // Makings: the model decides what this one makes and what it calls it; otherwise chance does.
+    while (w.attempts.length) {
+      const a = w.attempts.shift() as Attempt;
+      if (this.ready && now - this.lastMake > 5000 && !this.queue.some((j) => j.kind === "make")) {
+        this.lastMake = now;
+        this.queue.push({ kind: "make", id: a.who, attempt: a, pri: 7 });
+      } else {
+        const idea = applyAttempt(w, a, null);
+        if (idea) this.onMade(a.who, idea);
+      }
+    }
     // Names: a kith that has come of age names itself. With a model, in its own words.
     if (++this.tick % 30 === 0) {
       for (const c of w.creatures) {
@@ -151,16 +166,23 @@ export class Mind {
       if (job.kind === "voice") {
         const c = w.byId.get(job.id);
         if (!c) return;
-        const r = await this.post("voice", { now: nowFacts(w), one: kithFacts(w, c) });
+        const r = await this.post("voice", { now: nowFacts(w, c), one: kithFacts(w, c) });
         const live = w.byId.get(job.id);
         if (!live) return;
         if (!r || !applyVoice(w, live, r as VoiceResult)) this.plain(live);
+      } else if (job.kind === "make" && job.attempt) {
+        const facts = attemptFacts(w, job.attempt);
+        if (!facts) return;
+        const c = w.byId.get(job.attempt.who);
+        const r = c ? await this.post("make", { now: nowFacts(w, c), ...facts }) : null;
+        const idea = applyAttempt(w, job.attempt, r as AttemptResult | null);
+        if (idea) this.onMade(job.attempt.who, idea);
       } else if (job.meeting) {
         const m = job.meeting;
         const a = w.byId.get(m.a), b = w.byId.get(m.b);
         if (!a || !b) return;
         const facts = {
-          now: nowFacts(w),
+          now: nowFacts(w, a),
           a: { ...kithFacts(w, a, 8), can_tell: tellables(w, a, b, "a").list },
           b: { ...kithFacts(w, b, 8), can_tell: tellables(w, b, a, "b").list },
         };

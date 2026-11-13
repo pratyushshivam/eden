@@ -18,7 +18,7 @@ export class GlobeCam {
   /** Compass heading of the view (0 looks north), extra tilt, and distance from the point looked at. */
   az = 0;
   tilt = 0;
-  dist = 330;
+  dist = 290;
   /** Slow turning while nobody is touching. */
   drift = true;
   onTap: (x: number, y: number) => void = () => {};
@@ -34,7 +34,7 @@ export class GlobeCam {
   private goal = this.tgt.clone();
   private gAz = 0;
   private gTilt = 0;
-  private gDist = 330;
+  private gDist = 290;
   private following = false;
   private pointers = new Map<number, { x: number; y: number }>();
   private down = { x: 0, y: 0, t: 0, moved: false, button: 0, shift: false };
@@ -150,7 +150,7 @@ export class GlobeCam {
 
   /** Back out to the whole planet. */
   home(): void {
-    this.gDist = 330;
+    this.gDist = 290;
     this.gTilt = 0;
     this.gAz = 0;
     this.following = false;
