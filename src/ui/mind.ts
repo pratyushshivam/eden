@@ -145,7 +145,8 @@ export class Mind {
           this.unnamedSince.set(c.id, now);
           continue;
         }
-        if (!this.ready || now - since > 40_000) giveName(w, c, coinName(w, c.id));
+        // No words came in good time: it takes a name made of plain sounds.
+        if (!this.ready || now - since > 40_000 || (w.t - c.born) / DAY > SPECIES[KITH].adultAt + 1.5) giveName(w, c, coinName(w, c.id));
         else if (!this.waiting.has(c.id) && this.queue.length < 3 && now - this.lastAuto > 5000) {
           this.lastAuto = now;
           this.voice(c, true, 1);
@@ -166,7 +167,7 @@ export class Mind {
       if (job.kind === "voice") {
         const c = w.byId.get(job.id);
         if (!c) return;
-        const r = await this.post("voice", { now: nowFacts(w, c), one: kithFacts(w, c) });
+        const r = await this.post("voice", { now: nowFacts(w, c), one: kithFacts(w, c), names_taken: this.taken() });
         const live = w.byId.get(job.id);
         if (!live) return;
         if (!r || !applyVoice(w, live, r as VoiceResult)) this.plain(live);
@@ -174,7 +175,7 @@ export class Mind {
         const facts = attemptFacts(w, job.attempt);
         if (!facts) return;
         const c = w.byId.get(job.attempt.who);
-        const r = c ? await this.post("make", { now: nowFacts(w, c), ...facts }) : null;
+        const r = c ? await this.post("make", { now: nowFacts(w, c), ...facts, names_taken: this.taken() }) : null;
         const idea = applyAttempt(w, job.attempt, r as AttemptResult | null);
         if (idea) this.onMade(job.attempt.who, idea);
       } else if (job.meeting) {
@@ -183,6 +184,7 @@ export class Mind {
         if (!a || !b) return;
         const facts = {
           now: nowFacts(w, a),
+          names_taken: this.taken(),
           a: { ...kithFacts(w, a, 8), can_tell: tellables(w, a, b, "a").list },
           b: { ...kithFacts(w, b, 8), can_tell: tellables(w, b, a, "b").list },
         };
@@ -195,6 +197,15 @@ export class Mind {
       this.busy = false;
       this.onChange();
     }
+  }
+
+  /** Names already in use, so a new one is never a repeat. */
+  private taken(): string[] {
+    const out: string[] = [];
+    for (const c of this.w.creatures) if (c.name && out.length < 70) out.push(c.name);
+    for (const p of this.w.placeNames) if (p) out.push(p);
+    for (const i of this.w.ideas) if (i.kind === "craft" && i.text) out.push(i.text);
+    return out;
   }
 
   private async post(kind: string, facts: unknown): Promise<object | null> {

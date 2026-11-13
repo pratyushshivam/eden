@@ -64,7 +64,7 @@ export class Stage {
   private hemi = new THREE.HemisphereLight(0xbcd3ee, 0x40382c, 0.4);
   private sky: THREE.Mesh;
   private skyU: { [k: string]: THREE.IUniform };
-  private shared = { uSunDir: { value: new THREE.Vector3(1, 0, 0) }, uTime: { value: 0 }, uCover: { value: 0.03 } };
+  private shared = { uSunDir: { value: new THREE.Vector3(1, 0, 0) }, uTime: { value: 0 }, uCover: { value: 0.03 }, uLow: { value: 0 } };
   private seaMat: THREE.ShaderMaterial;
   private airMat: THREE.ShaderMaterial;
   private cloudMat: THREE.ShaderMaterial;
@@ -540,18 +540,21 @@ export class Stage {
       this.ring.scale.setScalar((1 + Math.sin(this.time * 3) * 0.06) * Math.min(3.2, Math.max(1.2, cam.dist / 50)));
     } else this.ring.visible = false;
 
-    // Keep the picture smooth on slower machines: step down a ladder of quality.
-    if (dt > 1 / 42) this.slowFrames++;
-    else this.slowFrames = Math.max(0, this.slowFrames - 2);
-    if (this.slowFrames > 100) {
+    // Keep the picture smooth on slower machines: step down a ladder of quality when frames run under about 52 a second.
+    if (this.fps < 52) this.slowFrames++;
+    else this.slowFrames = Math.max(0, this.slowFrames - 1);
+    if (this.slowFrames > 70 && (this.ratio > 0.76 || this.quality > 0)) {
       this.slowFrames = 0;
       if (this.ratio > 1.01) this.ratio = Math.max(1, this.ratio - 0.25);
-      else if (this.quality > 0) {
-        this.quality--;
-        if (this.quality === 1) this.sun.shadow.mapSize.set(1024, 1024);
+      else if (this.quality === 2) {
+        // Smaller shadows.
+        this.quality = 1;
+        this.sun.shadow.mapSize.set(1024, 1024);
         this.sun.shadow.map?.dispose();
         this.sun.shadow.map = null;
-      }
+        this.shared.uLow.value = 1; // and cheaper water and cloud
+      } else if (this.quality === 1) this.quality = 0; // no shadows
+      else this.ratio = 0.75; // and, last, a slightly softer picture
       this.resize();
     }
     this.renderer.render(this.scene, this.camera);
@@ -559,7 +562,7 @@ export class Stage {
 
   /** The trees right over the followed creature shrink out of the way, and grow back when it moves on. */
   private partTrees(at: { ux: number; uy: number; uz: number } | null): void {
-    const reach = (2.4 / R) ** 2;
+    const reach = (3.3 / R) ** 2;
     for (const g of this.groves) {
       let changed = false;
       for (let i = 0; i < g.at.length; i++) {

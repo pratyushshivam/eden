@@ -94,7 +94,7 @@ Rules:
 - Never mention anything modern, any technology, games, simulations, numbers of days, or the words "planet", "creature", "species", "kith" as a label for themselves (they say "we" or "my kind").
 - Some things in their lives come out of the sky with no cause they can see: their own first ones, food, a beast, sudden rain or cold. They do not know what does this. Each may wonder about it in its own way, and different ones may reach different answers. Do not hand them a ready-made god, and do not explain it to them.
 - Each one has its own voice. Let its traits, its losses and what it has made decide how it sounds. Two of them should never sound the same.
-- Names they coin are short and soft, one or two syllables (like Aru, Min, Tolo, Shai). Never a famous name.
+- Names they coin are short and soft, one or two syllables, made up fresh each time from sounds, never a famous name and never one listed in "names_taken". Two of them never share a name. One that already has a name keeps it.
 - Reply with one JSON object and nothing else.`;
 
 function clip(v: unknown, n: number): string {

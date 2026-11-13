@@ -374,7 +374,8 @@ async function boot(): Promise<void> {
           line("And they think.", "");
           if (tourKith && tourKith.alive) {
             const th = tourKith.thoughts[tourKith.thoughts.length - 1] ?? plainVoice(world, tourKith);
-            say(tourKith.id, nameOf(world, tourKith.id), th.text, "thought", 8000);
+            // The first two sentences are enough to read in the time there is.
+            say(tourKith.id, nameOf(world, tourKith.id), th.text.split(/(?<=[.!?])\s/).slice(0, 2).join(" "), "thought", 8000);
           }
         },
       },
@@ -515,32 +516,30 @@ async function boot(): Promise<void> {
         host.appendChild(b);
       }
     }
-    // Rings on the globe for the last few seconds of events.
+    // Rings on the globe for the last few seconds of events: only the newest few, and only from far enough to need them.
     const rhost = $("pings");
-    for (const p of world.pings) {
-      const age = now - (seenPing.get(p.id) ?? 0);
-      let el = rings.get(p.id);
-      if (age > 9000 || photo || touring) {
-        if (el) {
-          el.remove();
-          rings.delete(p.id);
+    const live = new Set<number>();
+    if (!photo && !touring && stage.cam.dist >= 60) {
+      for (const p of world.pings.slice(-8)) {
+        if (now - (seenPing.get(p.id) ?? 0) > 9000) continue;
+        const s = stage.toScreen(p.x, p.y, p.z, 1);
+        if (!s) continue;
+        live.add(p.id);
+        let el = rings.get(p.id);
+        if (!el) {
+          el = document.createElement("div");
+          el.className = `ping${p.kind === "hunt" || p.kind === "death" || p.kind === "kithDeath" || p.kind === "firstKill" ? " warm" : ""}`;
+          rhost.appendChild(el);
+          rings.set(p.id, el);
         }
-        continue;
+        el.style.transform = `translate(${Math.round(s.x)}px, ${Math.round(s.y)}px)`;
       }
-      const s = stage.toScreen(p.x, p.y, p.z, 1);
-      if (!s || stage.cam.dist < 60) {
-        if (el) el.style.display = "none";
-        continue;
-      }
-      if (!el) {
-        el = document.createElement("div");
-        el.className = `ping${p.kind === "hunt" || p.kind === "death" || p.kind === "kithDeath" || p.kind === "firstKill" ? " warm" : ""}`;
-        rhost.appendChild(el);
-        rings.set(p.id, el);
-      }
-      el.style.display = "";
-      el.style.transform = `translate(${Math.round(s.x)}px, ${Math.round(s.y)}px)`;
     }
+    for (const [id, el] of rings)
+      if (!live.has(id)) {
+        el.remove();
+        rings.delete(id);
+      }
     if (seenPing.size > 400) for (const id of seenPing.keys()) if (!world.pings.some((p) => p.id === id)) seenPing.delete(id);
   }
 
@@ -576,7 +575,8 @@ async function boot(): Promise<void> {
       statAt = now;
     }
     const el = $("spend");
-    if (import.meta.env.DEV && mind.spend) {
+    if (params.has("clean")) el.hidden = true;
+    else if (import.meta.env.DEV && mind.spend) {
       const s = mind.spend;
       el.hidden = false;
       el.textContent = `words: $${s.session.toFixed(4)} this session (limit $${s.sessionLimit.toFixed(2)}) · $${s.total.toFixed(4)} of $${s.totalLimit.toFixed(2)} in all · ${s.calls} calls · ${mind.ready ? "ready" : s.state === "ready" ? "limit reached" : s.state.replace("_", " ")}${debug ? ` · ${Math.round(stage.fps)} fps · ${Math.round(panels.stats.stepsPerSec)} steps/s` : ""}`;
@@ -595,7 +595,7 @@ async function boot(): Promise<void> {
     acc += dt * speed;
     // Step the world, but never spend more than a slice of the frame on it.
     const t0 = performance.now();
-    const stop = t0 + 11;
+    const stop = t0 + 8;
     let n = 0;
     while (acc >= DT) {
       step(world);

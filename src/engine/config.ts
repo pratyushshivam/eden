@@ -20,11 +20,13 @@ export const TILT = 0.36;
 export const THINK_EVERY = 4;
 /** No more births once this many creatures are alive. */
 export const MAX_CREATURES = 800;
+/** No one kind may be more than this many: the planet is shared. */
+export const MAX_PER_KIND = 220;
 
 /** Energy held by one grid cell of full grass, one fruit, one cell of full sea life. */
 export const GRASS_E = 80;
 export const BERRY_E = 16;
-export const FISH_E = 60;
+export const FISH_E = 30;
 export const BUSH_MAX = 5;
 
 export const DAPPLE = 0;
@@ -113,8 +115,8 @@ export const SPECIES: readonly SpeciesDef[] = [
   },
   {
     ...base, key: "glim", one: "glim", many: "glims", tier: 0, blurb: "Sea drifters that glow in the dark.",
-    sea: true, fish: true, speed: 1.8, sense: 10, lifespan: 12, adultAt: 1.3, maxEnergy: 60, mass: 18, burn: 0.2, bite: 3.5,
-    digest: 0.8, thirstDays: 999, comfort: -20, mateEvery: 1.0, mateAt: 0.64, birthEnergy: 24, tire: 0.01, crowd: 16,
+    sea: true, fish: true, speed: 1.8, sense: 10, lifespan: 10, adultAt: 1.3, maxEnergy: 60, mass: 18, burn: 0.2, bite: 3.5,
+    digest: 0.8, thirstDays: 999, comfort: -20, mateEvery: 1.3, mateAt: 0.64, birthEnergy: 24, tire: 0.01, crowd: 11,
   },
   {
     ...base, key: "murr", one: "murr", many: "murrs", tier: 1, blurb: "Long-armed foragers. They remember where food was.",

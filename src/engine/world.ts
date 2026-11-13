@@ -6,7 +6,7 @@
  * of sight.
  */
 import {
-  BERRY_E, BUSH_MAX, CLEVER, DAY, DT, FISH_E, GRASS_E, GRID, HIDDEN, IN, KITH, MAX_CREATURES, N_IN, N_OUT, N_SPECIES, N_VEC, OUT, R,
+  BERRY_E, BUSH_MAX, CLEVER, DAY, DT, FISH_E, GRASS_E, GRID, HIDDEN, IN, KITH, MAX_CREATURES, MAX_PER_KIND, N_IN, N_OUT, N_SPECIES, N_VEC, OUT, R,
   SEASON_DAYS, SPECIES, THINKER, THINK_EVERY, TILT, VEC, YEAR_DAYS, type Species,
 } from "./config";
 import { CRAFTS, C_BASKET, C_BLADE, C_CLOAK, C_COOK, C_DIGGER, C_NET, C_POT, C_RAFT, C_SOW, C_SPEAR, C_STONEHUT, C_TORCH, M } from "./craft";
@@ -351,7 +351,7 @@ function plants(w: World): void {
     const i = fc[k];
     const v = w.fish[i];
     const warm = Math.min(1, Math.max(0.25, (t.temp[i] + swing * g3.cy[i] + 4) / 18));
-    const d = Math.min(1 - v, (0.006 * v * (1 - v) + 0.0003) * warm * dt);
+    const d = Math.min(1 - v, (0.0022 * v * (1 - v) + 0.00012) * warm * dt);
     w.fish[i] = v + d;
     ledger.grown += d * FISH_E;
   }
@@ -1025,7 +1025,7 @@ function sense(w: World, c: Creature, idx: number): void {
   const felt = wx.temp - alt * 0.4 + warmth * 10 + Math.min(kinN, 4) * 1.4 + (kindHere === FOREST || kindHere === JUNGLE ? 1.5 : 0) + cloak;
   const cold = clamp01((def.comfort - felt) / 14);
   const eFrac = c.energy / def.maxEnergy;
-  const ready = adult && c.mateCd <= 0 && eFrac > def.mateAt && kinN < def.crowd && w.creatures.length < MAX_CREATURES ? 1 : 0;
+  const ready = adult && c.mateCd <= 0 && eFrac > def.mateAt && kinN < def.crowd && w.creatures.length < MAX_CREATURES && w.counts[sp] < MAX_PER_KIND ? 1 : 0;
   inp[IN.hunger] = 1 - eFrac;
   inp[IN.thirst] = c.thirst;
   inp[IN.tired] = c.tired;
