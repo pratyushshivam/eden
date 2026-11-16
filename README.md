@@ -17,6 +17,7 @@
   <a href="#the-numbers">The numbers</a> ·
   <a href="#what-is-real-and-what-is-not">What is real</a> ·
   <a href="#run-it">Run it</a> ·
+  <a href="https://www.pratyushshivam.com/projects/eden/">The full write-up</a> ·
   <a href="https://www.pratyushshivam.com/">pratyushshivam.com</a>
 </p>
 
